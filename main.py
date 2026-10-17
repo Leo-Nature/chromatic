@@ -1,9 +1,10 @@
-"""分析一张 JPEG 照片，校验模型建议，并保存可供后续调色使用的 JSON。"""
+"""为 JPEG/PNG 生成分析预览，校验模型建议并保存 JSON。"""
 
 import argparse
 import base64
 from datetime import datetime, timezone
 import hashlib
+from io import BytesIO
 import json
 import math
 import os
@@ -11,6 +12,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from openai import APIConnectionError, APIStatusError, APITimeoutError, OpenAI
+from PIL import Image, ImageCms, ImageOps
 
 
 MODEL = "deepseek-flash"
@@ -45,22 +47,48 @@ SYSTEM_PROMPT = """
 
 
 def encode_photo(image_path):
-    """读取 JPEG，返回图片 data URL 及由程序生成的来源信息。"""
+    """读取原图，生成长边最多 1600 的 JPEG，返回 data URL 和来源信息。"""
     path = Path(image_path).expanduser().resolve()
     if not path.is_file():
         raise ValueError(f"找不到照片：{path}")
-    if path.suffix.lower() not in (".jpg", ".jpeg"):
-        raise ValueError("本阶段只支持 JPEG，请使用 .jpg 或 .jpeg 照片")
-    if path.stat().st_size > 32 * 1024 * 1024:
-        raise ValueError("照片超过本阶段的 32 MiB 大小限制")
     data = path.read_bytes()
-    # 文件头初筛，不是完整图片解码。
-    if not data.startswith(b"\xff\xd8\xff"):
-        raise ValueError("文件没有有效的 JPEG 开头标记")
-    encoded = base64.b64encode(data).decode("ascii")
+    with Image.open(BytesIO(data)) as original:
+        if original.format not in ("JPEG", "PNG"):
+            raise ValueError("本阶段只支持 JPEG 和 PNG 图片")
+        if getattr(original, "n_frames", 1) != 1:
+            raise ValueError("暂不支持多帧图片")
+        if original.width * original.height > 80_000_000:
+            raise ValueError("图片超过本阶段的 8000 万像素处理限制")
+        original_dimensions = list(original.size)
+        image = ImageOps.exif_transpose(original)
+        # 不猜测透明区域对应的工程背景，留到支持渲染工程后处理。
+        if "A" in image.getbands() or "transparency" in image.info:
+            if image.convert("RGBA").getchannel("A").getextrema()[0] != 255:
+                raise ValueError("暂不支持含透明像素的图片，请使用不透明照片")
+        profile = image.info.get("icc_profile")
+        if profile:
+            try:
+                image = ImageCms.profileToProfile(
+                    image, ImageCms.ImageCmsProfile(BytesIO(profile)),
+                    ImageCms.createProfile("sRGB"), outputMode="RGB",
+                )
+            except ImageCms.PyCMSError as error:
+                raise ValueError("无法转换图片色彩配置文件") from error
+        else:
+            image = image.convert("RGB")
+        image.thumbnail((1600, 1600), Image.Resampling.LANCZOS)
+        buffer = BytesIO()
+        image.save(buffer, format="JPEG", quality=90)
+        preview = buffer.getvalue()
+        preview_dimensions = list(image.size)
+    encoded = base64.b64encode(preview).decode("ascii")
     source = {
         "image_path": str(path),
         "image_sha256": hashlib.sha256(data).hexdigest(),
+        "original_dimensions": original_dimensions,
+        "preview_sha256": hashlib.sha256(preview).hexdigest(),
+        "preview_dimensions": preview_dimensions,
+        "preview_processing": "EXIF 方向校正、RGB/sRGB 转换、等比例缩小、JPEG quality=90",
     }
     return f"data:image/jpeg;base64,{encoded}", source
 
@@ -152,8 +180,8 @@ def save_result(output_path, result, metadata):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="分析 JPEG 照片并保存调色建议")
-    parser.add_argument("--image", required=True, help="JPEG 照片路径")
+    parser = argparse.ArgumentParser(description="分析 JPEG/PNG 照片并保存调色建议")
+    parser.add_argument("--image", required=True, help="JPEG/PNG 照片路径")
     parser.add_argument("--instruction", required=True, help="本次修图要求")
     parser.add_argument("--output", required=True, help="新的 JSON 输出路径")
     args = parser.parse_args()

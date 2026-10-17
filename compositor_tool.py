@@ -35,23 +35,11 @@ def map_warmth_to_color_balance(warmth_adjustment):
     }
 
 
-def create_adjusted_project(source_path, output_path, warmth_adjustment):
-    """检查输入、复制完整工程、修改副本，返回输出工程的绝对路径。"""
-    settings = map_warmth_to_color_balance(warmth_adjustment)
+def validate_source_project(source_path):
+    """只读取并检查原工程，返回路径、配置字典和目标图层，不写入文件。"""
     source = Path(source_path).expanduser().resolve()
-    requested_output = Path(output_path).expanduser()
-    # 也拒绝失效的符号链接，避免意外写到链接指向的位置。
-    if requested_output.exists() or requested_output.is_symlink():
-        raise ValueError("输出路径已经存在，请换一个新的工程名称")
-    output = requested_output.resolve()
-
     if not source.is_dir():
         raise ValueError(f"找不到源工程目录：{source}")
-    if output == source or source in output.parents:
-        raise ValueError("输出不能是原始工程，也不能放在原始工程内部")
-    if output.suffix != ".comp":
-        raise ValueError("输出工程名称必须以 .comp 结尾")
-
     manifest_path = source / "manifest.json"
     if not manifest_path.is_file():
         raise ValueError("源工程缺少 manifest.json")
@@ -80,9 +68,48 @@ def create_adjusted_project(source_path, output_path, warmth_adjustment):
             image_path = (source / "images" / image_name).resolve()
             if source not in image_path.parents or not image_path.is_file():
                 raise ValueError(f"图层图片缺失或位于工程外部：{image_name}")
+    return source, manifest, target_layer
+
+
+def get_project_image(source_path):
+    """取得唯一、可见的顶层图片资源；不猜测多图或图层组的合成结果。"""
+    source, manifest, _ = validate_source_project(source_path)
+    if any(layer.get("isGroup") or layer.get("children") for layer in manifest["layers"]):
+        raise ValueError("当前只支持没有图层组的单图片工程")
+    images = [layer for layer in manifest["layers"] if "imageFile" in layer]
+    if len(images) != 1:
+        raise ValueError("工程必须恰好包含一个图片图层，不能自动选择多张图片")
+    layer = images[0]
+    layer_id = layer.get("id")
+    if not isinstance(layer_id, str) or not layer_id:
+        raise ValueError("图片图层必须有有效 ID")
+    if sum(item.get("id") == layer_id for item in manifest["layers"]) != 1:
+        raise ValueError("图片图层 ID 不唯一")
+    if layer.get("isVisible") is not True:
+        raise ValueError("图片图层必须可见")
+    image_dir = (source / "images").resolve()
+    image_path = (image_dir / layer["imageFile"]).resolve()
+    if source not in image_dir.parents or image_dir not in image_path.parents:
+        raise ValueError("图片资源必须位于工程内部的 images 目录")
+    return source, layer, image_path
+
+
+def create_adjusted_project(source_path, output_path, warmth_adjustment):
+    """检查输入、复制完整工程、修改副本，返回输出工程的绝对路径。"""
+    settings = map_warmth_to_color_balance(warmth_adjustment)
+    requested_output = Path(output_path).expanduser()
+    # 也拒绝失效的符号链接，避免意外写到链接指向的位置。
+    if requested_output.exists() or requested_output.is_symlink():
+        raise ValueError("输出路径已经存在，请换一个新的工程名称")
+    output = requested_output.resolve()
+    source, manifest, target_layer = validate_source_project(source_path)
+    if output == source or source in output.parents:
+        raise ValueError("输出不能是原始工程，也不能放在原始工程内部")
+    if output.suffix != ".comp":
+        raise ValueError("输出工程名称必须以 .comp 结尾")
 
     # 这里先修改内存中的字典；原始 manifest 文件没有被写入。
-    adjustment["colorBalanceSettings"] = settings
+    target_layer["adjustment"]["colorBalanceSettings"] = settings
     target_layer["isVisible"] = True
 
     # copytree 复制整个目录，包括图片和其他工程资源；默认拒绝覆盖。
