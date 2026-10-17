@@ -1,4 +1,4 @@
-"""读取已有分析，核对照片来源，并把冷暖建议应用到工程副本。"""
+"""核对已有分析的来源，将四项基础调整应用到工程副本。"""
 
 import argparse
 from datetime import datetime, timezone
@@ -6,7 +6,11 @@ import hashlib
 import json
 from pathlib import Path
 
-from compositor_tool import create_adjusted_project, get_project_image, map_warmth_to_color_balance
+from compositor_tool import (
+    CONTRAST_LAYER_NAME, EXPOSURE_LAYER_NAME, SATURATION_LAYER_NAME, TARGET_LAYER_NAME,
+    create_adjusted_project, get_project_image, map_contrast_to_curves, map_exposure_ev,
+    map_saturation_adjustment, map_warmth_to_color_balance,
+)
 from main import validate_analysis
 
 
@@ -54,11 +58,32 @@ def load_verified_analysis(analysis_path, source_path):
         "image_layer_id": layer["id"],
         "image_file": layer["imageFile"],
     }
+    reference = metadata.get("reference")
+    if reference is not None:
+        result = validate_analysis(document, require_reference=True)
+        if not isinstance(reference, dict):
+            raise ValueError("参考作品来源必须是有效对象")
+        for key in ("image_path", "preview_path"):
+            if not isinstance(reference.get(key), str) or not reference[key].strip():
+                raise ValueError(f"参考作品来源缺少 {key}")
+        for key in ("image_sha256", "preview_sha256"):
+            value = reference.get(key)
+            if (
+                not isinstance(value, str) or len(value) != 64
+                or any(char not in "0123456789abcdefABCDEF" for char in value)
+            ):
+                raise ValueError(f"参考作品来源缺少有效的 {key}")
+        # 记录请求时的参考快照，不要求原参考文件此刻仍在原位置。
+        source["reference"] = {key: reference[key] for key in (
+            "image_path", "image_sha256", "preview_path", "preview_sha256"
+        )}
+    elif "reference_analysis" in result or metadata.get("analysis_mode") == "reference":
+        raise ValueError("参考分析缺少参考作品来源，已停止执行")
     return result, source
 
 
 def apply_saved_analysis(analysis_path, source_path, output_path):
-    """执行冷暖建议并保存旁边的报告，返回工程路径和报告路径。"""
+    """执行四项基础建议，返回工程路径和报告路径。"""
     result, source = load_verified_analysis(analysis_path, source_path)
     requested_output = Path(output_path).expanduser()
     if requested_output.exists() or requested_output.is_symlink():
@@ -73,6 +98,9 @@ def apply_saved_analysis(analysis_path, source_path, output_path):
 
     plan = result["adjustment_plan"]
     warmth = plan["warmth_adjustment"]
+    saturation = plan["saturation_adjustment"]
+    exposure_ev = plan["exposure_ev"]
+    contrast = plan["contrast_adjustment"]
     report = {
         "status": "project_created_pending_visual_review",
         "created_at": datetime.now(timezone.utc).isoformat(),
@@ -81,17 +109,45 @@ def apply_saved_analysis(analysis_path, source_path, output_path):
         "photo_source_verified": True,
         "project_photo_verified": True,
         "verification_scope": "原图字节指纹、图层 ID 及资源引用；不代表合成画面或审美已验证",
-        "applied_adjustments": {"warmth_adjustment": warmth},
-        "color_balance_settings": map_warmth_to_color_balance(warmth),
-        "not_applied_adjustments": {
-            name: value for name, value in plan.items() if name != "warmth_adjustment"
+        "applied_adjustments": {
+            "warmth_adjustment": warmth, "saturation_adjustment": saturation,
+            "exposure_ev": exposure_ev,
+            "contrast_adjustment": contrast,
         },
-        "not_applied_reason": "当前工具仅支持冷暖，其余建议尚无执行映射",
+        "color_balance_settings": map_warmth_to_color_balance(warmth),
+        "saturation_settings": {"saturation": map_saturation_adjustment(saturation)},
+        "saturation_layer_name": SATURATION_LAYER_NAME,
+        "exposure_settings": map_exposure_ev(exposure_ev),
+        "exposure_layer_name": EXPOSURE_LAYER_NAME,
+        "contrast_curves": map_contrast_to_curves(contrast),
+        "contrast_layer_name": CONTRAST_LAYER_NAME,
+        "tool_layer_order_bottom_to_top": [
+            TARGET_LAYER_NAME, EXPOSURE_LAYER_NAME, CONTRAST_LAYER_NAME, SATURATION_LAYER_NAME,
+        ],
+        "mapping_rules": {
+            "warmth": "round(value * 20)，实验映射，未校准",
+            "saturation": "round(value * 100)，范围换算，非视觉百分比",
+            "exposure": "EV 档数直接写入 exposure；offset=0，gamma=1；输入限制 [-2, 2]",
+            "contrast": "a=value*32；RGB 总曲线 (0,0),(64,64-a),(128,128),(192,192+a),(255,255)；暂定、未校准，非百分比",
+        },
+        "not_applied_adjustments": {
+            name: value for name, value in plan.items()
+            if name not in ("warmth_adjustment", "saturation_adjustment", "exposure_ev", "contrast_adjustment")
+        },
+        "not_applied_reason": "当前方案的四项基础建议均已执行",
         "review_note": "分析来源与工程图片已核对；请对照分析预览检查画面和实际调色效果",
     }
+    if "reference_analysis" in result:
+        report["analysis_mode"] = "reference"
+        report["reference_analysis"] = result["reference_analysis"]
+        report["transfer_explanation"] = result["transfer_explanation"]
+        report["execution_scope"] = "初步应用冷暖、饱和度、曝光和对比度，不代表完整风格迁移或审美已验收"
     # 报告先序列化为文字，确认内容可保存，再调用已有工程工具。
     report_text = json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False)
-    create_adjusted_project(source_path, output, warmth)
+    create_adjusted_project(
+        source_path, output, warmth, saturation_adjustment=saturation, exposure_ev=exposure_ev,
+        contrast_adjustment=contrast,
+    )
     # 检查真正复制出的资源，防止检查后、复制前源文件变化而仍报告成功。
     _, copied_layer, copied_image = get_project_image(output)
     if (
@@ -111,7 +167,7 @@ def apply_saved_analysis(analysis_path, source_path, output_path):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="把已保存分析的冷暖建议应用到 Compositor 工程")
+    parser = argparse.ArgumentParser(description="把已存分析的四项基础建议应用到 Compositor 工程")
     parser.add_argument("--analysis", required=True, help="已保存的分析 JSON")
     parser.add_argument("--input", required=True, help="原始 Compositor 工程目录")
     parser.add_argument("--output", required=True, help="新的 .comp 输出工程")
@@ -126,7 +182,7 @@ def main():
         parser.exit(1, f"执行失败：{error}\n")
     print(f"已生成工程：{output}")
     print(f"执行记录：{report_path}")
-    print("已应用冷暖建议；曝光、对比度和饱和度建议均未执行。")
+    print("已应用冷暖、饱和度、曝光和对比度建议；请检查实际画面。")
     print("工程图片来源已核对，请对照预览并开关调整图层检查效果。")
 
 

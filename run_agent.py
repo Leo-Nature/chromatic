@@ -1,4 +1,4 @@
-"""统一入口：检查输入、分析照片、保存建议，并执行冷暖调色。"""
+"""统一入口：检查输入、分析照片、保存建议，并执行冷暖、饱和度、曝光和对比度。"""
 
 import argparse
 import base64
@@ -31,7 +31,7 @@ def describe_error(error):
     return str(error)
 
 
-def run_pipeline(instruction, source_path, output_dir):
+def run_pipeline(instruction, source_path, output_dir, reference_path=None):
     """复用各模块，返回分析、工程、报告的路径和本次建议。"""
     stage = "检查输入"
     run_created = False
@@ -49,6 +49,10 @@ def run_pipeline(instruction, source_path, output_dir):
         if run_dir == source or source in run_dir.parents:
             raise ValueError("结果目录不能放在原始工程内部")
         image_url, photo_source = encode_photo(image_path)
+        reference_url = None
+        reference_source = None
+        if reference_path is not None:
+            reference_url, reference_source = encode_photo(reference_path)
         api_key = load_api_key()
 
         # 在请求前创建专属目录，确认目标可创建；exist_ok=False 拒绝抢占已有目录。
@@ -60,20 +64,31 @@ def run_pipeline(instruction, source_path, output_dir):
         preview_bytes = base64.b64decode(image_url.split(",", 1)[1], validate=True)
         with preview_path.open("xb") as file:
             file.write(preview_bytes)
+        if reference_source is not None:
+            reference_preview = run_dir / "reference-preview.jpg"
+            reference_bytes = base64.b64decode(reference_url.split(",", 1)[1], validate=True)
+            with reference_preview.open("xb") as file:
+                file.write(reference_bytes)
+            reference_source["preview_path"] = str(reference_preview)
+            print(f"参考作品预览：{reference_preview}", flush=True)
         print(f"分析来源：图层 {image_layer.get('name')}；预览：{preview_path}", flush=True)
 
         stage = "请求照片分析"
         print(f"[2/4] 请求 {MODEL} 分析照片（自动重试关闭）……", flush=True)
-        content = request_analysis(image_url, instruction, api_key)
+        if reference_url is None:
+            content = request_analysis(image_url, instruction, api_key)
+        else:
+            content = request_analysis(image_url, instruction, api_key, reference_url=reference_url)
 
         stage = "校验并保存分析"
         print("[3/4] 校验并保存分析……", flush=True)
-        result = validate_analysis(json.loads(content))
+        result = validate_analysis(json.loads(content), require_reference=reference_source is not None)
         metadata = {
             **photo_source,
             "instruction": instruction,
             "model": MODEL,
             "created_at": datetime.now(timezone.utc).isoformat(),
+            "analysis_mode": "reference" if reference_source is not None else "automatic",
             "preview_path": str(preview_path),
             "project_source": {
                 "project_path": str(source),
@@ -81,11 +96,13 @@ def run_pipeline(instruction, source_path, output_dir):
                 "image_file": image_layer["imageFile"],
             },
         }
+        if reference_source is not None:
+            metadata["reference"] = reference_source
         save_result(analysis_path, result, metadata)
         analysis_saved = True
 
-        stage = "生成冷暖调色工程"
-        print("[4/4] 核对照片来源并生成冷暖调色工程……", flush=True)
+        stage = "生成冷暖、饱和度、曝光和对比度调色工程"
+        print("[4/4] 核对照片来源并生成冷暖、饱和度、曝光和对比度调色工程……", flush=True)
         project_path, report_path = apply_saved_analysis(
             analysis_path, source, project_path
         )
@@ -106,22 +123,26 @@ def run_pipeline(instruction, source_path, output_dir):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="一次完成照片分析与 Compositor 冷暖调色")
+    parser = argparse.ArgumentParser(description="一次完成照片分析与 Compositor 冷暖、饱和度、曝光、对比度调色")
     parser.add_argument("--instruction", required=True, help="本次修图要求")
     parser.add_argument("--input", required=True, help="原始 Compositor 工程目录")
+    parser.add_argument("--reference", help="可选参考作品 JPEG/PNG，仅借鉴风格")
     parser.add_argument("--output", required=True, help="本次运行的新结果目录，必须尚不存在")
     args = parser.parse_args()
     try:
         analysis, project, report, result = run_pipeline(
-            args.instruction, args.input, args.output
+            args.instruction, args.input, args.output, reference_path=args.reference
         )
     except PipelineError as error:
         parser.exit(1, f"流程失败：{error}\n")
 
     print(json.dumps(result, ensure_ascii=False, indent=2))
     print(f"分析：{analysis}\n工程：{project}\n执行记录：{report}")
-    print("流程已完成，已执行冷暖；曝光、对比度、饱和度未执行。")
+    print("流程已完成，已执行冷暖、饱和度、曝光和对比度。")
     print(f"分析预览：{analysis.parent / 'analysis-preview.jpg'}")
+    if args.reference is not None:
+        print(f"参考预览：{analysis.parent / 'reference-preview.jpg'}")
+        print("参考模式目前初步应用冷暖、饱和度、曝光和对比度，不代表完整风格迁移。")
     print("工程图片来源已核对，请对照预览并在 Compositor 中检查效果。")
 
 

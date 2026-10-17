@@ -2,7 +2,7 @@
 
 Chromatic 是一个基于 Compositor 的 AI 照片调色学习项目，目标是让 AI 分析照片、解释调色建议，并生成可以继续编辑的调整结果。项目同时用于学习如何构建 Agent。
 
-当前处于原型阶段：已修正分析图片与调色图片不一致的问题。统一入口从工程中的唯一图片生成分析预览，保存模型建议，并核对工程来源后执行冷暖。10 项离线回归测试与一次同源真实运行通过，用户已完成最新结果的视觉验收。其他三项调整及参考作品功能尚未实现。
+当前处于原型阶段：工程同源分析、参考作品双图分析，以及冷暖、饱和度、曝光和对比度四项基础执行均已通过用户验收。36 项离线测试通过，使用已有参考分析生成的四项组合工程也已验收。验证范围为本次样片和检查参数，用户反馈调整和交互界面尚未实现。
 
 ## 功能目标与验收标准
 
@@ -12,13 +12,15 @@ Chromatic 是一个基于 Compositor 的 AI 照片调色学习项目，目标是
 
 验收标准：程序输出调色建议和理由，并生成能在 Compositor 中打开的调整后工程；用户开关调整图层，能够检查前后变化，原始照片和工程得到保留。
 
-### 参考作品调色（目标，尚未实现）
+### 参考作品调色（完整目标尚未完成）
 
 输入原照片、已调色的参考作品和修图要求，AI 分析两张图片的差异，借鉴参考作品的冷暖、对比度、饱和度及阴影和高光色彩关系，制定适合原照片的调整方案。
 
 第一版计划在请求中同时提供两张图片，无需先训练专用模型。照片的光线和内容存在差异，参考风格调色不承诺完全复制参考图的观感。
 
 验收标准：程序说明借鉴了哪些色彩特征，并生成可编辑的调整后工程；用户通过前后对比和参考图，判断结果是否朝目标风格靠近。
+
+当前已支持双图分析、参考风格描述及迁移理由，并初步执行冷暖、饱和度、曝光和对比度；本次样片的四项组合效果已通过用户检查，不代表其他照片的审美效果或完整风格迁移均已验证。
 
 ## 预期工作流程
 
@@ -43,8 +45,9 @@ Chromatic 是一个基于 Compositor 的 AI 照片调色学习项目，目标是
 | 分析预览 | Pillow 读取 JPEG/PNG，校正 EXIF 方向，转换为 RGB/sRGB，长边最多 1600，JPEG 质量 90 | 原图不修改；拒绝透明像素、多帧和超出当前处理限制的图片 |
 | 模型分析 | DeepSeek 返回中文分析及曝光、对比度、冷暖、饱和度建议 | 格式及数值检查不能保证审美正确 |
 | 来源校验 | 分析记录绑定工程图片图层 ID、资源引用和原图 SHA-256；复制前后核对原图 | 检查字节及引用一致性，不认证模型建议，也不等同于合成画面一致 |
-| 冷暖执行 | 在工程副本中设置 Color Balance，并保存执行记录 | 暂不执行曝光、对比度和饱和度；不自动渲染或评估 |
-| 参考作品与反馈 | 计划功能 | 尚未实现 |
+| 调整执行 | 工程副本中设置 Color Balance、AI Exposure、AI Contrast 和 AI Saturation 图层，保存执行记录 | 不自动渲染或评估；本次样片的四项执行已验收，参数映射仍需后续校准 |
+| 参考作品 | 可选 JPEG/PNG 参考、双预览、风格描述和迁移理由，已完成真实运行 | 本次四项基础执行已验收，不代表完整风格迁移 |
+| 用户反馈 | 计划功能 | 尚未实现 |
 
 这是由 Python 安排顺序的固定工作流程；模型暂不自行选择工具或观察渲染结果继续迭代。
 
@@ -85,13 +88,38 @@ outputs/my-project-run/
 └── result.report.json
 ```
 
-四个阶段依次是：检查输入与生成预览、请求分析、校验并保存分析、核对工程来源并执行冷暖。预览的完整字节同时用于保存和模型请求，方便人工核对实际输入。
+四个阶段依次是：检查输入与生成预览、请求分析、校验并保存分析、核对工程来源并执行冷暖、饱和度、曝光和对比度。预览的完整字节同时用于保存和模型请求，方便人工核对实际输入。
 
 原工程中的完整图片继续用于输出工程；分析预览只用于模型，不替换工程原图。原图与 JPEG 预览分别记录指纹，不能直接把两种文件的指纹互相比较。PNG 文件超过旧的 32 MiB 限制时，可以先在本地解码并缩小，上传的只是小预览。
 
 本次实际结果在 `outputs/run-project-source/`：44.41 MiB 的 `4672 × 7008` PNG 转成 `1067 × 1600`、约 470 KiB 的 JPEG。模型建议曝光 `0`、对比度 `0`、冷暖 `0.15`、饱和度 `-0.1`；实际只执行冷暖，映射幅度 `3`。此数值不是通用预设。
 
 请求沿用 90 秒网络超时、最多 4096 个输出 token、关闭 SDK 自动重试和非思考模式。网络超时不是整个命令的精确总时限。接口参考 [DeepSeek 视觉文档](https://api-docs.deepseek.com/guides/vision/) 与 [思考模式文档](https://api-docs.deepseek.com/guides/thinking_mode/)。预览处理使用 [Pillow Image](https://pillow.readthedocs.io/en/stable/reference/Image.html) 和 [ImageOps](https://pillow.readthedocs.io/en/stable/reference/ImageOps.html)。
+
+## 可选参考作品：双图分析与基础调整
+
+```bash
+uv run run_agent.py --input outputs/test-photo-source.comp --reference model.jpg --instruction "参考作品的暖色和暗部氛围，保留原图主体细节，不要为了接近参考图而过度压暗。" --output outputs/my-reference-run
+```
+
+`--reference` 可省略，省略时继续使用原有自动分析模式；指定时必须是能读取的 JPEG/PNG，截图也可使用。参考图缺失或无法解码时，在模型调用前停止。
+
+模型消息明确标注图片 A 为待调整原图、图片 B 为仅借鉴风格的参考作品。原图仍只能来自工程，参考图不进入或替换输出工程。提示词要求区分场景和光线差异，针对原图制定方案，不机械复制参考图的亮度，也不复制主体或构图。
+
+参考模式在结果目录增加 `reference-preview.jpg`。两份预览都使用已有预处理，并保存与实际发送内容相同的字节。分析元数据增加 `analysis_mode: reference` 及 `reference` 来源，包括参考原文件路径及指纹、预览路径及指纹、原始和预览尺寸。
+
+分析新增两个字段，都会校验并保留到保存结果及执行报告：
+
+- `reference_analysis`：`warmth`、`contrast`、`saturation`、`tone` 四项非空中文描述。
+- `transfer_explanation`：说明原图与参考图的差异、借鉴特征、保留细节及局限的非空文字。
+
+参考模式缺少上述字段时不执行调色；参考内容缺少有效参考来源记录时也拒绝执行。执行记录保存请求时的参考快照信息，重试执行不需要参考原文件仍在原位置，也不会重新请求模型。
+
+本次实际结果在 `outputs/reference-model-run/`：原图预览 `1067 × 1600`，参考预览 `900 × 1600`。模型提出曝光 `-0.1`、对比度 `0.15`、冷暖 `0.25`、饱和度 `0.1`；仅执行冷暖，幅度 `5`，其余三项保留为未执行。本次模型曝光文字称保持曝光而数值为轻微降低，语义一致性仍需人工检查，字段校验不检测这类审美或文字判断。
+
+上述冷暖版本已获用户确认。新增饱和度后的检查用结果为 `outputs/reference-saturation.comp`，继续使用相同分析，没有重新调用模型；冷暖 `0.25` 映射为 `5`，饱和度 `0.1` 映射为 `10`，曝光和对比度未执行。对应 `outputs/reference-saturation.report.json` 保留参考风格描述及迁移理由。
+
+冷暖与饱和度版本已获用户确认。新增曝光版本为 `outputs/reference-exposure.comp`，继续使用同一分析，执行冷暖 `0.25 → 5`、饱和度 `0.1 → 10` 和曝光 `-0.1 EV`；对比度 `0.15` 未执行。对应 `outputs/reference-exposure.report.json` 保留参考风格描述、迁移理由和来源，曝光已获用户确认。最新四项执行结果为 `outputs/reference-contrast.comp` 及对应报告，增加对比度 `0.15`，四项组合效果已通过用户验收。旧结果与报告保留当时的执行范围。
 
 ## 分析与执行记录
 
@@ -102,7 +130,7 @@ outputs/my-project-run/
 - `analysis`：曝光、白平衡、对比度、整体色彩倾向的非空中文分析。
 - `adjustment_plan`：四项合法有限数值，曝光范围 `[-2, 2]`，其余范围 `[-1, 1]`。
 
-`result.report.json` 记录原图和分析文件的来源与指纹、原图层引用、已执行冷暖和未执行的三项建议，以及实际写入的 Color Balance 参数。`project_photo_verified: true` 表示工程资源与分析来源通过了字节和引用核对，**不表示审美或工程合成画面已验收**。状态 `project_created_pending_visual_review` 表示等待用户视觉检查。
+新版 `result.report.json` 记录原图和分析文件的来源与指纹、原图层引用、四项已执行参数、实际工具设置（含对比度的四通道曲线）、工具图层名、从底到顶的工具图层顺序和映射规则。当前四项均执行，`not_applied_adjustments` 为空对象，原因字段说明没有未执行的基础建议。`project_photo_verified: true` 表示工程资源与分析来源通过了字节和引用核对，**不表示审美或工程合成画面已验收**。状态 `project_created_pending_visual_review` 表示等待用户视觉检查。
 
 文件指纹用于发现误选和内容变化，不是对手动编辑分析文件的真实性认证。
 
@@ -132,6 +160,100 @@ uv run compositor_tool.py --input outputs/test-photo-source.comp --output output
 
 它只验证参数和工程结构，不使用 AI 分析。正值预期偏暖，负值预期偏冷，映射幅度为 `round(warmth * 20)`。这是用于打通流程的实验映射，尚未校准，不能视为精确的色温转换；第二阶段再研究响应并改进。参数替换目标图层的设置，不是在原值上累加；零值只中和此调整图层。
 
+## 基础饱和度执行
+
+工具入口支持可选 `--saturation`，旧的仅冷暖调用继续兼容，省略该选项时不新增或修改饱和度图层。已有分析执行入口和统一入口现在执行方案中的四项基础调整。
+
+```bash
+uv run compositor_tool.py --input outputs/test-photo-source.comp --output outputs/manual-saturation.comp --warmth 0 --saturation -0.3
+```
+
+饱和度建议范围 `[-1, 1]` 通过 `round(value * 100)` 对应编辑器 `[-100, 100]`。这是范围换算，不是视觉百分比，也没有完成样片校准。字段和图层类型依据 [Compositor 官方工程写入说明](https://github.com/robbietilton/Compositor/blob/main/docs/writing-comp-files.md) 与 [参数格式说明](https://github.com/robbietilton/Compositor/blob/main/docs/project-format.md)。
+
+输出新增 `AI Saturation` 图层，类型为 `Hue/Saturation`，色相和明度为零，着色关闭，Levels 和 Curves 为中性。新图层使用独立 UUID，没有图片文件，位于最上方，作用于下方冷暖及可选曝光、对比度调整后的画面。原图片资源不改动。
+
+若源工程已有工具管理的同名 Hue/Saturation 图层，则保留其 ID、替换 saturation、启用并移到最上方，不再新增一层，也不叠加旧数值；已有的其他设置保留。同名图层重复或类型冲突时停止，不覆盖其他图层。
+
+已生成检查用工程，三份都将冷暖设为零，以便单独比较饱和度：
+
+| 文件 | 建议值 | 写入值 |
+| --- | --- | --- |
+| `outputs/saturation-tests/decrease.comp` | `-0.3` | `-30` |
+| `outputs/saturation-tests/neutral.comp` | `0` | `0` |
+| `outputs/saturation-tests/increase.comp` | `0.3` | `30` |
+
+先在 Compositor 中开关各自的 `AI Saturation`，确认降低、零值、增加的方向和效果。再打开 `outputs/reference-saturation.comp`，分别开关 `Test Color Balance` 和 `AI Saturation`，检查合并效果。结构检查及用户视觉验收已通过；目前尚无自动导出的成片 JPG/PNG。
+
+## 基础曝光执行
+
+独立工具新增可选 `--exposure`，单位为 EV（曝光补偿档数），范围限制为 `[-2, 2]`。省略时不新增或修改曝光层；显式传 `0` 时生成或重置中性曝光层。原来的冷暖及饱和度调用继续兼容。
+
+```bash
+uv run compositor_tool.py --input outputs/test-photo-source.comp --output outputs/manual-exposure.comp --warmth 0 --exposure 0.5
+```
+
+已核对 Compositor 公开源码，固定版本为 `365b5745eda537f984f3d5bed1e53c361dbc9c91`：[LayerAdjustment.swift](https://github.com/robbietilton/Compositor/blob/365b5745eda537f984f3d5bed1e53c361dbc9c91/Compositor/Document/LayerAdjustment.swift) 定义 `kind: Exposure` 和 `exposureSettings`；[ImageAdjustments.swift](https://github.com/robbietilton/Compositor/blob/365b5745eda537f984f3d5bed1e53c361dbc9c91/Compositor/Document/ImageAdjustments.swift#L35-L70) 定义 `exposure`、`offset`、`gamma`。曝光按 `2 ** exposure` 缩放线性光，再编码回显示值；编辑器曝光范围为 `[-20, 20]`，本项目仍限制在 `[-2, 2]`。这次只使用 EV，固定 `offset=0`、`gamma=1`。EV 不乘系数、不四舍五入，也不等同于直接乘 sRGB 像素数值；增加曝光可能使高光达到上限。公开源码核实不替代本机 Compositor 的实际加载与视觉验收。
+
+新增 `AI Exposure` 独立调整层，具有唯一 UUID、全画布尺寸、Normal 混合、100% 不透明度，以及中性的 Levels、Curves 等基础设置。`new_adjustment_layer` 抽出曝光与饱和度共用的建层结构；实际像素处理交给 Compositor。
+
+当前四项组合执行的工具顺序从底到顶为 `Test Color Balance → AI Exposure → AI Contrast → AI Saturation`；省略对比度的旧工具调用不新增该层。若已有同名 Exposure 层，复用 ID、启用并替换 `exposureSettings`，将 offset 和 gamma 恢复中性，不累加 EV；其他图层属性保留。同名重复、组或类型冲突时拒绝复制。当前是无蒙版、全画布工具层的基础执行方案，不承诺对用户自行改过蒙版、不透明度等配置仍产生相同效果。
+
+检查用固定工程都从原始冰柜工程生成，冷暖为零，不新增饱和度层，原有 Test Curves 保持关闭：
+
+| 文件 | 曝光 |
+| --- | --- |
+| `outputs/exposure-tests/decrease.comp` | `-0.5 EV`，预期变暗 |
+| `outputs/exposure-tests/neutral.comp` | `0 EV`，预期保持 |
+| `outputs/exposure-tests/increase.comp` | `+0.5 EV`，预期变亮 |
+
+随后用已有参考分析执行三项调整，没有再次请求模型：
+
+```bash
+uv run apply_analysis.py --analysis outputs/reference-model-run/analysis.json --input outputs/test-photo-source.comp --output outputs/reference-exposure.comp
+```
+
+以上命令本次已经执行，输出和报告已存在，重试时须换新名称。已核对四份输出的参数、图层类型、唯一 ID、资源完整性及报告一致性；原工程、参考图和旧分析保持原样。曝光实际加载与效果已获用户确认。该版本保留三个工具层，`-0.1 EV` 的组合变化较轻微；新增对比度的四项组合验收见下节。
+
+## 基础对比度执行
+
+独立工具新增可选 `--contrast`，建议值范围为 `[-1, 1]`，不是百分比。省略时不新增或修改对比度层；显式 `0` 时创建或重置为中性曲线。旧的冷暖、饱和度和曝光调用继续兼容。
+
+```bash
+uv run compositor_tool.py --input outputs/test-photo-source.comp --output outputs/manual-contrast.comp --warmth 0 --contrast 0.5
+```
+
+参数结构与插值方式依据固定版本的 [Compositor Curves.swift](https://github.com/robbietilton/Compositor/blob/365b5745eda537f984f3d5bed1e53c361dbc9c91/Compositor/Document/Curves.swift)：`curves.channel` 为 `RGB`，`channels` 依次是 RGB 总曲线、红、绿、蓝。每条曲线需有 2～32 个点，起止横坐标为 0 和 255，横坐标严格递增，横纵坐标均为有限数值且在 `[0, 255]` 内；允许小数。编辑器以保形三次 Hermite 插值平滑连接控制点，避免过冲。像素先经过单独颜色通道曲线，再经过 RGB 总曲线。
+
+本项目只调整总曲线，单独红、绿、蓝保持中性。暂定幅度 `a = contrast_adjustment * 32`，不取整；总曲线的五个点为：
+
+```text
+(0, 0), (64, 64-a), (128, 128), (192, 192+a), (255, 255)
+```
+
+正值压低暗部控制点并抬高亮部，负值反向；黑、白及中间控制点固定。零值为中性直线。全范围内控制点纵坐标也严格递增。这是有边界的基础 S 曲线方案，未完成样片校准；`0.15` 不代表视觉对比度增加 15%。RGB 总曲线逐通道处理仍可能改变颜色观感，也不代表感知亮度保持不变。保留纯黑与纯白，因此降低对比度不会把纯黑抬成灰。
+
+新增独立 `AI Contrast` 曲线层，置于曝光之上、饱和度之下。沿用已有建层函数；不改动原来的 `Test Curves`。已有同名 Curves 层则复用 ID、替换整组曲线、恢复单独颜色通道中性，并启用该层，不累加；其他图层属性保留。同名重复、组、图片层或类型冲突时拒绝生成。与其他工具层一样，当前按未被用户改过蒙版和不透明度的全画布层验收。
+
+三份固定参数工程从原始冰柜工程生成，冷暖为零，不新增曝光和饱和度层，原来的 Test Curves 保持关闭：
+
+| 文件 | 建议值 | 暗部点 / 亮部点 |
+| --- | --- | --- |
+| `outputs/contrast-tests/decrease.comp` | `-0.5` | `64 → 80` / `192 → 176` |
+| `outputs/contrast-tests/neutral.comp` | `0` | `64 → 64` / `192 → 192` |
+| `outputs/contrast-tests/increase.comp` | `0.5` | `64 → 48` / `192 → 208` |
+
+使用同一份已有参考分析完成四项执行，没有再次调用模型：
+
+```bash
+uv run apply_analysis.py --analysis outputs/reference-model-run/analysis.json --input outputs/test-photo-source.comp --output outputs/reference-contrast.comp
+```
+
+该命令本次已执行，重试须换新的输出名称。组合参数为冷暖 `0.25 → 5`、曝光 `-0.1 EV`、对比度 `0.15`（暗部 `64 → 59.2`，亮部 `192 → 196.8`）和饱和度 `0.1 → 10`。对应 `outputs/reference-contrast.report.json` 记录四项参数、实际曲线、图层顺序及参考来源；未执行项为空，不表示完整风格迁移已经完成。
+
+除 36 项 Python 回归测试外，本次还在临时目录直接运行了公开源码的 Swift 曲线校验与插值方法：对 `[-1, 1]` 每隔 `0.01` 的 201 组强度，每组以 `0.1` 间隔采样 0～255，共 512,751 个采样点，确认曲线有效、方向正确、单调且不越界，零值为中性。该核对使用官方曲线计算方法，不等同于运行整套 Compositor 图像渲染，也不新增项目运行依赖。
+
+四份输出已核对资源和配置，原工程、参考图及分析文件保持原样。请先开关三份固定工程的 `AI Contrast`，检查降低、零值、增加的方向；再打开组合工程，分别开关四个工具层。三份固定参数工程和四项组合工程的实际加载及效果已通过用户验收；此结论限于本次样片和检查参数，目前仍无自动导出的成片 JPG/PNG。
+
 ## 检查和失败处理
 
 运行离线回归测试，不产生 API 用量：
@@ -140,9 +262,11 @@ uv run compositor_tool.py --input outputs/test-photo-source.comp --output output
 uv run python -m unittest discover -s tests -v
 ```
 
-已保存的 10 项测试覆盖：上传预览与保存内容一致、来源及输出资源绑定、同图层 ID 的错图拦截、旧分析拒绝、图层引用变化、多图片及图层组拒绝、请求期间原图变化、复制出的资源异常、方向与比例、损坏图片和输出冲突。
+已保存的 36 项离线测试通过：10 项照片来源测试、7 项参考作品测试、6 项饱和度测试、6 项曝光测试，以及新增 7 项对比度测试。对比度测试覆盖控制点范围与方向、小数参数、非法输入、工程隔离、原曲线保留、四项顺序与复用、入口兼容、同名冲突及 CLI。流程测试确认四项均已执行、未执行项为空，并核对报告的工具顺序。
 
 本次同源真实运行的程序检查通过：原图、分析记录和输出图片指纹一致，图层 ID 和资源引用一致，保存预览与预览指纹一致；配置只改变目标调整图层，原工程、原照片及旧分析均保留。用户已打开最新结果并确认验证通过；这不代表其他照片或其他调整参数也已验证。
+
+参考模式冷暖版本的程序检查和用户验收已通过。本次新增饱和度没有重新请求模型，三份固定参数工程及一份已有分析驱动工程的结构检查通过：仅目标冷暖配置与饱和度层变化，资源完整，原工程、照片、参考作品及分析文件均未改变。新增饱和度效果已获用户确认。
 
 用户验收顺序：先查看 `analysis-preview.jpg`，再阅读分析，最后打开 `result.comp`，确认是同一画面并开关 `Test Color Balance` 检查效果。Finder 缩略图可能是旧预览，以 Compositor 实际画布为准。
 
@@ -163,14 +287,14 @@ uv run python -m unittest discover -s tests -v
 | 文件 | 职责 |
 | --- | --- |
 | `main.py` | JPEG/PNG 预览、模型请求、结果校验和保存 |
-| `compositor_tool.py` | 工程检查、唯一图片选择、冷暖映射和工程副本 |
+| `compositor_tool.py` | 工程检查、唯一图片选择、四项基础调整映射和工程副本 |
 | `apply_analysis.py` | 已存分析与目标工程来源校验、执行记录 |
 | `run_agent.py` | 统一编排四阶段流程 |
-| `tests/test_project_source.py` | 图片错配等问题的离线回归测试 |
+| `tests/test_project_source.py`、`tests/test_reference.py`、`tests/test_saturation.py`、`tests/test_exposure.py`、`tests/test_contrast.py` | 来源、参考作品及基础调色工具的离线回归测试 |
 | `AGENTS.md` | 先讲解、批准后施工、验收后继续的协作规则 |
 | `pyproject.toml`、`uv.lock` | 依赖声明与确切版本锁定 |
 
-Git commit 在本地保存版本，Git push 将提交同步到 GitHub。每个阶段通过程序检查和用户验收后，提醒用户检查差异并提交；需要备份或分享时再推送。本次来源修正、统一入口与测试作为同一阶段版本保存，按用户授权推送 GitHub；推送结果以 Git 提交记录和远程状态核对为准。
+Git commit 在本地保存版本，Git push 将提交同步到 GitHub。每个阶段通过程序检查和用户验收后，提醒用户检查差异并提交；需要备份或分享时再推送。来源修正与统一入口此前已提交并推送；本次整理参考作品分析及四项基础调色功能，按用户授权仅创建本地提交，暂不推送 GitHub。实际提交与同步状态以 Git 记录为准。
 
 `.gitignore` 排除 `.env`、`.venv/`、Python 缓存、`.DS_Store`、根目录 `test.jpg`、`manifest_test.json` 和 `outputs/`，忽略不会删除本地文件。`test.py` 是用户的 Base64 练习；其暂存状态保留，不自动混入阶段提交。
 
@@ -181,8 +305,8 @@ Git commit 在本地保存版本，Git push 将提交同步到 GitHub。每个�
 目标是从输入工程、修图要求及可选参考作品，完成分析、合法方案、工具执行、可编辑结果及执行记录，并支持用户查看结果后提出一次修改要求，再次调整。
 
 - 已完成：工程唯一图片来源、分析预览、模型建议、来源校验及冷暖执行；已通过本次用户验收。
-- 接下来：增加参考作品分析，比较原图与参考图并解释准备借鉴的特征。
-- 补齐演示必需的基础调色执行能力，使用保守、有边界且可追溯的实现；参考风格不能仅凭冷暖就宣称完整迁移。
+- 已获用户验收：参考作品双图分析，以及冷暖、饱和度、曝光和对比度四项基础执行；三份固定对比度工程与参考分析驱动的四项组合工程均通过本次用户检查。
+- 已补齐当前方案的四项基础调色执行能力；继续使用有边界且可追溯的实现，参数执行完整不代表完整风格迁移。
 - 增加一次用户反馈调整，以及查看输入、建议、输出和执行内容的方式。
 - 阶段内优先保证任务完整、输入对应、执行准确和失败可解释；不反复追求每项参数的精细效果。
 

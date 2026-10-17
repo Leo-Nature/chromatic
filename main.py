@@ -24,9 +24,10 @@ PARAMETER_RANGES = {
     "saturation_adjustment": (-1.0, 1.0),
 }
 ANALYSIS_FIELDS = ("exposure", "white_balance", "contrast", "color_tendency")
+REFERENCE_FIELDS = ("warmth", "contrast", "saturation", "tone")
 SYSTEM_PROMPT = """
 你是一名专业的摄影后期调色助手。分析照片的实际情况，结合用户要求给出保守的初步调色建议。
-必须用中文描述分析，并只返回合法 JSON 对象，包含以下两个顶层字段：
+必须用中文描述分析，并只返回合法 JSON 对象，包含以下基础字段：
 
 1. analysis：包含四个非空字符串字段：
    exposure（曝光状态）、white_balance（白平衡状态）、contrast（对比度状态）、
@@ -43,6 +44,21 @@ SYSTEM_PROMPT = """
 {"analysis":{"exposure":"曝光适中，建议保持","white_balance":"白平衡自然，建议保持",
 "contrast":"对比度适中，建议保持","color_tendency":"色彩自然，建议保持"},
 "adjustment_plan":{"exposure_ev":0,"contrast_adjustment":0,"warmth_adjustment":0,"saturation_adjustment":0}}
+"""
+REFERENCE_PROMPT = """
+本次为参考作品模式。图片 A 是待调整原图，图片 B 是仅供借鉴风格的参考作品。
+analysis 只分析 A；adjustment_plan 是针对 A 的调整，不是参考图 B 的参数，也不能套用 B 的亮度。
+另外必须返回两个顶层字段：
+reference_analysis：包含四个非空中文字符串 warmth（冷暖）、contrast（对比度）、
+saturation（色彩浓度及主色关系）、tone（明暗与阴影高光特征）。
+transfer_explanation：非空中文字符串，说明 A 与 B 的差异、要借鉴的特征、需要保留的细节及局限。
+区分拍摄光线、物体本身颜色和可能的调色风格，不将所有场景差异都归因于后期。
+只借鉴色彩及影调，不要求复制构图或替换主体。不要为了接近暗调参考而机械压暗明亮原图。
+无法确定的原因应说明不确定。文字建议与数值方向一致，遵守用户要求和保守调整原则。
+补充字段格式示例：
+"reference_analysis":{"warmth":"暖色倾向","contrast":"局部反差明显",
+"saturation":"红色突出","tone":"大面积暗部"},
+"transfer_explanation":"借鉴暖色氛围，保留原图主体和高光细节。"
 """
 
 
@@ -102,8 +118,20 @@ def load_api_key():
     return api_key
 
 
-def request_analysis(image_url, instruction, api_key):
+def request_analysis(image_url, instruction, api_key, reference_url=None):
     """发起一次请求，返回模型正文；禁用 SDK 自动重试。"""
+    content = [
+        {"type": "text", "text": "用户修图要求：" + instruction},
+        {"type": "text", "text": "图片 A：待调整原图。"},
+        {"type": "image_url", "image_url": {"url": image_url}},
+    ]
+    prompt = SYSTEM_PROMPT
+    if reference_url is not None:
+        prompt += REFERENCE_PROMPT
+        content.extend([
+            {"type": "text", "text": "图片 B：参考作品，仅用于借鉴风格，不是调色目标。"},
+            {"type": "image_url", "image_url": {"url": reference_url}},
+        ])
     with OpenAI(api_key=api_key, base_url=BASE_URL, timeout=90.0, max_retries=0) as client:
         response = client.chat.completions.create(
             model=MODEL,
@@ -111,14 +139,8 @@ def request_analysis(image_url, instruction, api_key):
             max_tokens=4096,
             extra_body={"thinking": {"type": "disabled"}},
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": instruction},
-                        {"type": "image_url", "image_url": {"url": image_url}},
-                    ],
-                },
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": content},
             ],
         )
     if not response.choices:
@@ -134,7 +156,7 @@ def request_analysis(image_url, instruction, api_key):
     return content
 
 
-def validate_analysis(result):
+def validate_analysis(result, require_reference=False):
     """校验完整结构与数值范围，返回只含约定字段的数据。"""
     if not isinstance(result, dict):
         raise ValueError("模型结果必须是 JSON 对象")
@@ -152,10 +174,24 @@ def validate_analysis(result):
         # 先检查范围，也避免把极大的整数传给 math.isfinite。
         if not minimum <= value <= maximum or not math.isfinite(value):
             raise ValueError(f"参数 {name} 必须是 [{minimum}, {maximum}] 内的有限数值")
-    return {
+    validated = {
         "analysis": {name: analysis[name].strip() for name in ANALYSIS_FIELDS},
         "adjustment_plan": {name: plan[name] for name in PARAMETER_RANGES},
     }
+    # 参考模式要求完整字段；重复校验和保存时也保留这些已知字段。
+    if require_reference or "reference_analysis" in result or "transfer_explanation" in result:
+        reference = result.get("reference_analysis")
+        if not isinstance(reference, dict):
+            raise ValueError("参考模式缺少有效的 reference_analysis")
+        for name in REFERENCE_FIELDS:
+            if not isinstance(reference.get(name), str) or not reference[name].strip():
+                raise ValueError(f"参考分析字段 {name} 必须是非空文字")
+        explanation = result.get("transfer_explanation")
+        if not isinstance(explanation, str) or not explanation.strip():
+            raise ValueError("参考模式的 transfer_explanation 必须是非空文字")
+        validated["reference_analysis"] = {name: reference[name].strip() for name in REFERENCE_FIELDS}
+        validated["transfer_explanation"] = explanation.strip()
+    return validated
 
 
 def check_output_path(output_path):
@@ -172,7 +208,10 @@ def check_output_path(output_path):
 
 def save_result(output_path, result, metadata):
     """写入校验后的结果及程序元数据，x 模式拒绝覆盖已有文件。"""
-    document = {"metadata": metadata, **validate_analysis(result)}
+    document = {
+        "metadata": metadata,
+        **validate_analysis(result, require_reference=metadata.get("reference") is not None),
+    }
     text = json.dumps(document, ensure_ascii=False, indent=2, allow_nan=False)
     with Path(output_path).open("x", encoding="utf-8") as file:
         file.write(text + "\n")
@@ -218,7 +257,7 @@ def main():
 
     print(json.dumps(result, ensure_ascii=False, indent=2))
     print(f"分析结果已保存：{output}")
-    print("本步骤只生成建议，尚未应用调色。当前 Compositor 工具仅支持冷暖。")
+    print("本步骤只生成建议，尚未应用调色。当前 Compositor 工具支持冷暖、饱和度、曝光和对比度。")
 
 
 if __name__ == "__main__":

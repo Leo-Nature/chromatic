@@ -40,6 +40,7 @@ class ProjectSourceTests(unittest.TestCase):
         Image.new("RGB", (80, 120), color).save(source / "images/photo.png")
         manifest = {
             "format": "com.compositor.project",
+            "width": 80, "height": 120,
             "layers": [
                 {"id": "photo-id", "name": "Photo", "imageFile": "photo.png", "isVisible": True},
                 {"id": "balance-id", "name": "Test Color Balance", "isVisible": False,
@@ -71,8 +72,14 @@ class ProjectSourceTests(unittest.TestCase):
         self.assertEqual((project / "images/photo.png").read_bytes(), original)
         report = json.loads(report_path.read_text())
         self.assertTrue(report["project_photo_verified"])
-        self.assertEqual(report["applied_adjustments"], {"warmth_adjustment": 0.15})
-        self.assertEqual(len(report["not_applied_adjustments"]), 3)
+        self.assertEqual(report["applied_adjustments"], {
+            "warmth_adjustment": 0.15, "saturation_adjustment": -0.1, "exposure_ev": -0.2,
+            "contrast_adjustment": -0.1,
+        })
+        self.assertEqual(report["not_applied_adjustments"], {})
+        self.assertEqual(report["exposure_settings"], {"exposure": -0.2, "offset": 0, "gamma": 1})
+        layers = json.loads((project / "manifest.json").read_text())["layers"]
+        self.assertEqual([layer["name"] for layer in layers[-4:]], report["tool_layer_order_bottom_to_top"])
 
     def test_wrong_project_rejected_even_with_same_layer_id(self):
         paths, _ = self.run_offline()
@@ -133,8 +140,8 @@ class ProjectSourceTests(unittest.TestCase):
 
     def test_copy_changed_after_check_never_reports_verified_success(self):
         paths, _ = self.run_offline()
-        def changed_copy(source, output, warmth):
-            create_adjusted_project(source, output, warmth)
+        def changed_copy(source, output, warmth, saturation_adjustment=None, exposure_ev=None, contrast_adjustment=None):
+            create_adjusted_project(source, output, warmth, saturation_adjustment, exposure_ev, contrast_adjustment)
             Image.new("RGB", (80, 120), "blue").save(output / "images/photo.png")
         output = self.root / "raced.comp"
         with patch("apply_analysis.create_adjusted_project", side_effect=changed_copy):
