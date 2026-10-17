@@ -13,3 +13,11 @@ wheels/
 
 # Virtual environments
 .venv/
+
+# macOS directory metadata
+.DS_Store
+
+# Local demo inputs and generated results (keep files on disk)
+/test.jpg
+/manifest_test.json
+/outputs/
