@@ -129,14 +129,34 @@ def load_previous_state(report_path, source_path):
     return result, metadata, state, original_preview, reference_preview
 
 
-def run_refinement(previous_report, source_path, feedback, output_dir):
+def snapshot_previous(source_path, state):
+    """记录确认时的版本及两份工程配置；用于检查和提交之间的变化检测。"""
+    source = Path(source_path).expanduser().resolve()
+    previous = Path(state["previous_output_project"])
+    return {
+        "state": state,
+        "source_manifest_sha256": hashlib.sha256((source / "manifest.json").read_bytes()).hexdigest(),
+        "previous_manifest_sha256": hashlib.sha256((previous / "manifest.json").read_bytes()).hexdigest(),
+    }
+
+
+def run_refinement(
+    previous_report, source_path, feedback, output_dir,
+    progress_callback=None, expected_previous=None,
+):
     """校验上一轮、请求新方案、保存，再复用现有工具从原工程执行。"""
     stage = "检查反馈输入"
     created = False
     saved = False
     run_dir = Path(output_dir).expanduser()
+
+    def notify(number, message):
+        print(f"[{number}/4] {message}……", flush=True)
+        if progress_callback is not None:
+            progress_callback(number, message)
+
     try:
-        print("[1/4] 核对上一轮记录、原工程和预览……", flush=True)
+        notify(1, "核对上一轮记录、原工程和预览")
         if not isinstance(feedback, str) or not feedback.strip():
             raise ValueError("反馈不能为空")
         feedback = feedback.strip()
@@ -145,6 +165,9 @@ def run_refinement(previous_report, source_path, feedback, output_dir):
         run_dir = run_dir.resolve()
         previous, metadata, state, original_bytes, reference_bytes = load_previous_state(previous_report, source_path)
         source = Path(source_path).expanduser().resolve()
+        confirmed = snapshot_previous(source, state)
+        if expected_previous is not None and confirmed != expected_previous:
+            raise ValueError("选中版本或工程配置已发生变化，请重新检查反馈")
         for project in (source, Path(state["previous_output_project"])):
             if run_dir == project or project in run_dir.parents:
                 raise ValueError("新结果目录不能放在原工程或上一轮结果工程内部")
@@ -165,13 +188,13 @@ def run_refinement(previous_report, source_path, feedback, output_dir):
         image_url = "data:image/jpeg;base64," + base64.b64encode(original_bytes).decode("ascii")
 
         stage = "请求反馈方案"
-        print(f"[2/4] 请求 {MODEL} 根据文字反馈修订方案（自动重试关闭）……", flush=True)
+        notify(2, f"请求 {MODEL} 根据文字反馈修订方案（自动重试关闭）")
         content = request_analysis(
             image_url, feedback, api_key, reference_url=reference_url,
             feedback_context={"original_instruction": metadata["instruction"], "previous_result": previous},
         )
         stage = "校验并保存反馈方案"
-        print("[3/4] 校验四项最终参数与修改理由……", flush=True)
+        notify(3, "校验四项最终参数与修改理由")
         result = validate_analysis(json.loads(content), require_reference=reference is not None, require_feedback=True)
         new_metadata = {
             **{key: metadata[key] for key in (
@@ -186,15 +209,17 @@ def run_refinement(previous_report, source_path, feedback, output_dir):
         }
         if reference is not None:
             new_metadata["reference"] = reference
+        if expected_previous is not None:
+            new_metadata["confirmed_previous"] = expected_previous
         analysis_path = run_dir / "analysis.json"
         save_result(analysis_path, result, new_metadata)
         saved = True
 
         stage = "从原工程执行反馈方案"
-        print("[4/4] 再次核对来源，从原工程生成新版本……", flush=True)
+        notify(4, "再次核对来源，从原工程生成新版本")
         _, _, current_state, _, _ = load_previous_state(previous_report, source)
-        if current_state != state:
-            raise ValueError("上一轮记录在模型请求期间发生变化，已停止执行")
+        if snapshot_previous(source, current_state) != confirmed:
+            raise ValueError("上一轮记录或工程配置在模型请求期间发生变化，已停止执行")
         project, report = apply_saved_analysis(analysis_path, source, run_dir / "result.comp")
         return analysis_path, project, report, result
     except (ValueError, OSError, APIConnectionError, APIStatusError) as error:

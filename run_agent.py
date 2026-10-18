@@ -3,6 +3,7 @@
 import argparse
 import base64
 from datetime import datetime, timezone
+import hashlib
 import json
 from pathlib import Path
 
@@ -31,14 +32,36 @@ def describe_error(error):
     return str(error)
 
 
-def run_pipeline(instruction, source_path, output_dir, reference_path=None):
+def snapshot_inputs(source, image_layer, photo_source, reference_source):
+    """描述已准备的输入，供界面比较预览和实际请求是否仍是同一份内容。"""
+    return {
+        "project_path": str(source),
+        "manifest_sha256": hashlib.sha256((source / "manifest.json").read_bytes()).hexdigest(),
+        "image_layer_id": image_layer["id"], "image_file": image_layer["imageFile"],
+        "image_sha256": photo_source["image_sha256"],
+        "preview_sha256": photo_source["preview_sha256"],
+        "reference_image_sha256": reference_source["image_sha256"] if reference_source else None,
+        "reference_preview_sha256": reference_source["preview_sha256"] if reference_source else None,
+    }
+
+
+def run_pipeline(
+    instruction, source_path, output_dir, reference_path=None,
+    progress_callback=None, expected_inputs=None,
+):
     """复用各模块，返回分析、工程、报告的路径和本次建议。"""
     stage = "检查输入"
     run_created = False
     analysis_saved = False
     run_dir = Path(output_dir).expanduser()
+
+    def notify(number, message):
+        print(f"[{number}/4] {message}……", flush=True)
+        if progress_callback is not None:
+            progress_callback(number, message)
+
     try:
-        print("[1/4] 检查输入……", flush=True)
+        notify(1, "检查输入")
         instruction = instruction.strip()
         if not instruction:
             raise ValueError("修图要求不能为空")
@@ -53,6 +76,10 @@ def run_pipeline(instruction, source_path, output_dir, reference_path=None):
         reference_source = None
         if reference_path is not None:
             reference_url, reference_source = encode_photo(reference_path)
+        if expected_inputs is not None:
+            current_inputs = snapshot_inputs(source, image_layer, photo_source, reference_source)
+            if current_inputs != expected_inputs:
+                raise ValueError("工程、照片或参考作品已发生变化，请重新检查输入并确认预览")
         api_key = load_api_key()
 
         # 在请求前创建专属目录，确认目标可创建；exist_ok=False 拒绝抢占已有目录。
@@ -74,14 +101,14 @@ def run_pipeline(instruction, source_path, output_dir, reference_path=None):
         print(f"分析来源：图层 {image_layer.get('name')}；预览：{preview_path}", flush=True)
 
         stage = "请求照片分析"
-        print(f"[2/4] 请求 {MODEL} 分析照片（自动重试关闭）……", flush=True)
+        notify(2, f"请求 {MODEL} 分析照片（自动重试关闭）")
         if reference_url is None:
             content = request_analysis(image_url, instruction, api_key)
         else:
             content = request_analysis(image_url, instruction, api_key, reference_url=reference_url)
 
         stage = "校验并保存分析"
-        print("[3/4] 校验并保存分析……", flush=True)
+        notify(3, "校验并保存分析")
         result = validate_analysis(json.loads(content), require_reference=reference_source is not None)
         metadata = {
             **photo_source,
@@ -98,11 +125,17 @@ def run_pipeline(instruction, source_path, output_dir, reference_path=None):
         }
         if reference_source is not None:
             metadata["reference"] = reference_source
+        if expected_inputs is not None:
+            metadata["confirmed_inputs"] = expected_inputs
         save_result(analysis_path, result, metadata)
         analysis_saved = True
 
         stage = "生成冷暖、饱和度、曝光和对比度调色工程"
-        print("[4/4] 核对照片来源并生成冷暖、饱和度、曝光和对比度调色工程……", flush=True)
+        notify(4, "核对照片来源并生成四项调色工程")
+        if expected_inputs is not None:
+            current_manifest_hash = hashlib.sha256((source / "manifest.json").read_bytes()).hexdigest()
+            if current_manifest_hash != expected_inputs["manifest_sha256"]:
+                raise ValueError("原工程配置在分析期间发生变化，已停止执行；请重新检查输入")
         project_path, report_path = apply_saved_analysis(
             analysis_path, source, project_path
         )
