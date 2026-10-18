@@ -79,6 +79,29 @@ def load_verified_analysis(analysis_path, source_path):
         )}
     elif "reference_analysis" in result or metadata.get("analysis_mode") == "reference":
         raise ValueError("参考分析缺少参考作品来源，已停止执行")
+    feedback = metadata.get("feedback")
+    if feedback is not None or "feedback_explanation" in result:
+        result = validate_analysis(document, require_feedback=True)
+        if not isinstance(feedback, dict):
+            raise ValueError("反馈分析缺少上一轮来源记录")
+        text_keys = ("text", "previous_report_path", "previous_analysis_path", "previous_output_project")
+        hash_keys = ("previous_report_sha256", "previous_analysis_sha256")
+        for key in text_keys:
+            if not isinstance(feedback.get(key), str) or not feedback[key].strip():
+                raise ValueError(f"反馈来源缺少 {key}")
+        for key in hash_keys:
+            value = feedback.get(key)
+            if (not isinstance(value, str) or len(value) != 64
+                or any(char not in "0123456789abcdefABCDEF" for char in value)):
+                raise ValueError(f"反馈来源缺少有效的 {key}")
+        previous_plan = validate_analysis({
+            "analysis": result["analysis"],
+            "adjustment_plan": feedback.get("previous_adjustment_plan"),
+        })["adjustment_plan"]
+        source["feedback"] = {
+            **{key: feedback[key] for key in (*text_keys, *hash_keys)},
+            "previous_adjustment_plan": previous_plan,
+        }
     return result, source
 
 
@@ -142,6 +165,14 @@ def apply_saved_analysis(analysis_path, source_path, output_path):
         report["reference_analysis"] = result["reference_analysis"]
         report["transfer_explanation"] = result["transfer_explanation"]
         report["execution_scope"] = "初步应用冷暖、饱和度、曝光和对比度，不代表完整风格迁移或审美已验收"
+    if "feedback" in source:
+        report["feedback"] = source["feedback"]
+        report["feedback_explanation"] = result["feedback_explanation"]
+        report["parameter_changes"] = {
+            name: {"previous": old, "new": plan[name], "delta": plan[name] - old}
+            for name, old in source["feedback"]["previous_adjustment_plan"].items()
+        }
+        report["model_observation_scope"] = "原照片及可选参考预览、上一轮方案与用户文字反馈；未提供调整后成片"
     # 报告先序列化为文字，确认内容可保存，再调用已有工程工具。
     report_text = json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False)
     create_adjusted_project(
