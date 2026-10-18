@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 from compositor_tool import get_project_image
 from main import encode_photo
+from photo_project import create_photo_project, verify_photo_import
 from refine_agent import (
     load_previous_state, read_verified_preview, required_path, run_refinement, snapshot_previous,
 )
@@ -17,6 +18,7 @@ from run_agent import run_pipeline, snapshot_inputs
 
 
 MAX_REFERENCE_BYTES = 20 * 1024 * 1024
+MAX_PHOTO_BYTES = 50 * 1024 * 1024
 
 
 def input_signature(source_path, instruction, reference_bytes=None):
@@ -28,14 +30,27 @@ def input_signature(source_path, instruction, reference_bytes=None):
     }
 
 
-def prepare_job(source_path, instruction, output_root, reference_bytes=None):
-    """只检查和保存输入快照，不读取密钥、不调用模型。"""
+def photo_input_signature(photo_bytes, instruction, reference_bytes=None):
+    """照片模式按原文件内容识别输入，不依赖用户上传的文件名。"""
+    return {
+        "input_mode": "photo", "instruction": instruction.strip(),
+        "photo_sha256": hashlib.sha256(photo_bytes).hexdigest() if photo_bytes is not None else None,
+        "reference_sha256": hashlib.sha256(reference_bytes).hexdigest() if reference_bytes is not None else None,
+    }
+
+
+def validate_job_text(instruction, reference_bytes):
     if not isinstance(instruction, str) or not instruction.strip():
         raise ValueError("请填写修图要求")
-    if not str(source_path).strip():
-        raise ValueError("请填写原工程路径")
     if reference_bytes is not None and (not reference_bytes or len(reference_bytes) > MAX_REFERENCE_BYTES):
         raise ValueError("参考作品必须是非空文件，大小不超过 20 MiB")
+
+
+def prepare_job(source_path, instruction, output_root, reference_bytes=None):
+    """只检查和保存输入快照，不读取密钥、不调用模型。"""
+    validate_job_text(instruction, reference_bytes)
+    if not str(source_path).strip():
+        raise ValueError("请填写原工程路径")
     source, image_layer, image_path = get_project_image(source_path)
     if source.suffix != ".comp":
         raise ValueError("原工程路径必须以 .comp 结尾")
@@ -46,6 +61,43 @@ def prepare_job(source_path, instruction, output_root, reference_bytes=None):
     job_id = uuid.uuid4().hex
     job_dir = root / "ui-inputs" / job_id
     job_dir.mkdir(parents=True, exist_ok=False)
+    return save_prepared_job(
+        source, image_layer, image_url, photo_source, instruction, root, job_dir,
+        reference_bytes, input_signature(source_path, instruction, reference_bytes),
+    )
+
+
+def prepare_photo_job(photo_bytes, instruction, output_root, reference_bytes=None):
+    """本地保存上传副本、建立全尺寸工程，再走同一套预览准备逻辑。"""
+    validate_job_text(instruction, reference_bytes)
+    if not isinstance(photo_bytes, bytes) or not photo_bytes or len(photo_bytes) > MAX_PHOTO_BYTES:
+        raise ValueError("请上传非空 JPEG/PNG 原照片，文件大小不超过 50 MiB")
+    root = Path(output_root).expanduser().resolve()
+    job_dir = root / "ui-inputs" / uuid.uuid4().hex
+    job_dir.mkdir(parents=True, exist_ok=False)
+    photo_path = job_dir / "photo-input"
+    with photo_path.open("xb") as file:
+        file.write(photo_bytes)
+    source, report_path = create_photo_project(photo_path, job_dir / "source.comp")
+    source, image_layer, image_path = get_project_image(source)
+    image_url, photo_source = encode_photo(image_path)
+    imported = {
+        "photo_path": str(photo_path), "photo_sha256": hashlib.sha256(photo_bytes).hexdigest(),
+        "report_path": str(report_path),
+        "report_sha256": hashlib.sha256(report_path.read_bytes()).hexdigest(),
+    }
+    verify_photo_import(imported, source, image_layer, photo_source)
+    return save_prepared_job(
+        source, image_layer, image_url, photo_source, instruction, root, job_dir,
+        reference_bytes, photo_input_signature(photo_bytes, instruction, reference_bytes), imported,
+    )
+
+
+def save_prepared_job(
+    source, image_layer, image_url, photo_source, instruction, root, job_dir,
+    reference_bytes, signature, imported=None,
+):
+    """两种入口共用参考检查、预览保存、来源快照及结果路径生成。"""
     reference_path = None
     reference_source = None
     reference_url = None
@@ -69,10 +121,12 @@ def prepare_job(source_path, instruction, output_root, reference_bytes=None):
         "reference_path": str(reference_path) if reference_path is not None else None,
         "preview_path": str(preview_path),
         "reference_preview_path": str(reference_preview_path) if reference_preview_path is not None else None,
-        "result_dir": str(root / f"ui-run-{date}-{job_id[:8]}"),
-        "input_signature": input_signature(source_path, instruction, reference_bytes),
+        "result_dir": str(root / f"ui-run-{date}-{job_dir.name[:8]}"),
+        "input_signature": signature,
         "expected_inputs": snapshot_inputs(source, image_layer, photo_source, reference_source),
     }
+    if imported is not None:
+        job["expected_import"] = imported
     with (job_dir / "prepared.json").open("x", encoding="utf-8") as file:
         json.dump(job, file, ensure_ascii=False, indent=2, allow_nan=False)
         file.write("\n")
@@ -113,6 +167,7 @@ def submit_job(job, current_signature, progress_callback=None):
         job["instruction"], job["source_path"], job["result_dir"],
         reference_path=job["reference_path"], progress_callback=progress_callback,
         expected_inputs=job["expected_inputs"],
+        expected_import=job.get("expected_import"),
     )
 
 

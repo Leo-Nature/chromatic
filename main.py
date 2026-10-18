@@ -74,8 +74,8 @@ FEEDBACK_PROMPT = """
 """
 
 
-def encode_photo(image_path):
-    """读取原图，生成长边最多 1600 的 JPEG，返回 data URL 和来源信息。"""
+def load_photo(image_path):
+    """检查并规范化 JPEG/PNG，返回全尺寸 RGB 图像和输入文件来源。调用方负责关闭图像。"""
     path = Path(image_path).expanduser().resolve()
     if not path.is_file():
         raise ValueError(f"找不到照片：{path}")
@@ -104,6 +104,17 @@ def encode_photo(image_path):
                 raise ValueError("无法转换图片色彩配置文件") from error
         else:
             image = image.convert("RGB")
+    return image, {
+        "image_path": str(path),
+        "image_sha256": hashlib.sha256(data).hexdigest(),
+        "original_dimensions": original_dimensions,
+    }
+
+
+def encode_photo(image_path):
+    """复用全尺寸读取，再生成长边最多 1600 的 JPEG 分析预览。"""
+    image, source = load_photo(image_path)
+    with image:
         image.thumbnail((1600, 1600), Image.Resampling.LANCZOS)
         buffer = BytesIO()
         image.save(buffer, format="JPEG", quality=90)
@@ -111,9 +122,7 @@ def encode_photo(image_path):
         preview_dimensions = list(image.size)
     encoded = base64.b64encode(preview).decode("ascii")
     source = {
-        "image_path": str(path),
-        "image_sha256": hashlib.sha256(data).hexdigest(),
-        "original_dimensions": original_dimensions,
+        **source,
         "preview_sha256": hashlib.sha256(preview).hexdigest(),
         "preview_dimensions": preview_dimensions,
         "preview_processing": "EXIF 方向校正、RGB/sRGB 转换、等比例缩小、JPEG quality=90",

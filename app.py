@@ -16,7 +16,8 @@ from refine_agent import read_verified_preview, required_path
 from run_agent import PipelineError
 from ui_jobs import (
     feedback_signature, input_signature, job_submitted, prepare_feedback_job,
-    prepare_job, prepared_previews, submit_feedback_job, submit_job,
+    photo_input_signature, prepare_job, prepare_photo_job, prepared_previews,
+    submit_feedback_job, submit_job,
 )
 
 
@@ -152,13 +153,26 @@ def open_result_project(report_path):
 def render_new_job(root):
     """准备和提交分开；普通控件重运行只读状态，不发模型请求。"""
     with st.expander("新建调色", expanded=False):
-        st.caption("先检查原工程与可选参考作品，确认预览后再提交分析。")
+        st.caption("上传原照片或使用已有工程；先检查并确认预览，再提交分析。")
+        input_mode = st.radio(
+            "输入方式", ["上传原照片", "使用已有工程"], horizontal=True, key="new_input_mode",
+        )
         left, right = st.columns([3, 2])
+        source_text = None
+        photo_bytes = None
         with left:
-            source_text = st.text_input(
-                "原工程路径", value=str(PROJECT_DIR / "outputs/test-photo-source.comp"),
-                help="填写本机 .comp 原工程目录。照片仍从工程中读取。", key="new_source",
-            )
+            if input_mode == "上传原照片":
+                photo = st.file_uploader(
+                    "原照片（JPEG / PNG）", type=["jpg", "jpeg", "png"],
+                    max_upload_size=50, key="new_photo",
+                )
+                photo_bytes = photo.getvalue() if photo is not None else None
+                st.caption("最多 50 MiB、8000 万像素。检查时保存原文件副本，并建立全尺寸原始工程。")
+            else:
+                source_text = st.text_input(
+                    "原工程路径", value=str(PROJECT_DIR / "outputs/test-photo-source.comp"),
+                    help="填写本机 .comp 原工程目录。照片仍从工程中读取。", key="new_source",
+                )
             instruction = st.text_area(
                 "修图要求", value="保持自然，稍微暖一点，保留主体细节，不要过度饱和。",
                 key="new_instruction", height=100,
@@ -171,10 +185,12 @@ def render_new_job(root):
             st.caption("支持截图，单文件最多 20 MiB。留空则按原照片和要求分析。")
         reference_bytes = upload.getvalue() if upload is not None else None
         try:
-            signature = input_signature(source_text, instruction, reference_bytes)
+            signature = (photo_input_signature(photo_bytes, instruction, reference_bytes)
+                         if input_mode == "上传原照片" else
+                         input_signature(source_text, instruction, reference_bytes))
         except (ValueError, OSError) as error:
             st.session_state.pop("prepared_job", None)
-            st.error(f"工程路径不可用：{error}")
+            st.error(f"输入不可用：{error}")
             return
         job = st.session_state.get("prepared_job")
         if job is not None and signature != job["input_signature"]:
@@ -187,8 +203,11 @@ def render_new_job(root):
             st.session_state.pop("job_notice", None)
             job = None
             try:
-                with st.spinner("正在检查图片并准备预览……"):
-                    job = prepare_job(source_text, instruction, root, reference_bytes)
+                with st.spinner("正在检查图片、准备原始工程与预览……"):
+                    if input_mode == "上传原照片":
+                        job = prepare_photo_job(photo_bytes, instruction, root, reference_bytes)
+                    else:
+                        job = prepare_job(source_text, instruction, root, reference_bytes)
                 st.session_state["prepared_job"] = job
             except (ValueError, OSError) as error:
                 st.error(f"输入检查失败：{error}")
@@ -200,6 +219,8 @@ def render_new_job(root):
             st.error(f"待分析预览不可用，请重新检查输入：{error}")
             return
         st.markdown("**本次待分析输入**")
+        if job.get("expected_import") is not None:
+            st.caption("原照片副本与全尺寸原始工程已保存。下方预览从该工程读取，后续反馈也以该工程为起点。")
         original_column, reference_column = st.columns(2)
         with original_column:
             st.image(previews["original"], caption="待分析原照片预览", width=260)
@@ -313,12 +334,11 @@ def render_page(output_dir=None):
     """查看不调用模型；初次调色与反馈都需要单独检查和明确提交。"""
     root = Path(output_dir).resolve() if output_dir is not None else PROJECT_DIR / "outputs"
     st.set_page_config(page_title="Chromatic · 调色记录", page_icon="🎨", layout="wide")
+    # 只定制排版；背景和文字交给 Streamlit 主题配对，避免 Dark 模式浅字叠浅底。
     st.markdown("""<style>
-        .stApp { background: #faf9f6; }
-        [data-testid="stSidebar"] { background: #f0eee8; }
         .block-container { max-width: 1320px; padding-top: 2.4rem; }
         h1, h2, h3 { letter-spacing: -.025em; }
-        [data-testid="stMetric"] { background: white; border-radius: 12px; padding: 1rem; }
+        [data-testid="stMetric"] { border-radius: 12px; padding: 1rem; }
     </style>""", unsafe_allow_html=True)
     st.title("Chromatic")
     st.caption("查看调色建议，比较每一轮选择。")

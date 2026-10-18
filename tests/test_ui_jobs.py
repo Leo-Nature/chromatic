@@ -55,7 +55,10 @@ class UIJobTests(unittest.TestCase):
                            self.reference.read_bytes() if reference else None)
 
     def page(self):
-        return AppTest.from_function(show_analysis_ui, args=[str(self.outputs)], default_timeout=45)
+        page = AppTest.from_function(show_analysis_ui, args=[str(self.outputs)], default_timeout=45)
+        # 这些既有测试专门覆盖工程路径入口；上传入口由独立测试覆盖。
+        page.session_state["new_input_mode"] = "使用已有工程"
+        return page
 
     def test_prepare_previews_without_api_or_original_changes(self):
         before = {str(p): p.read_bytes() for p in self.source.rglob("*") if p.is_file()}

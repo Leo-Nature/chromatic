@@ -12,6 +12,7 @@ from openai import APIConnectionError, APIStatusError, APITimeoutError
 from apply_analysis import apply_saved_analysis
 from compositor_tool import get_project_image
 from main import MODEL, encode_photo, load_api_key, request_analysis, save_result, validate_analysis
+from photo_project import verify_photo_import
 
 
 class PipelineError(RuntimeError):
@@ -48,6 +49,7 @@ def snapshot_inputs(source, image_layer, photo_source, reference_source):
 def run_pipeline(
     instruction, source_path, output_dir, reference_path=None,
     progress_callback=None, expected_inputs=None,
+    expected_import=None,
 ):
     """复用各模块，返回分析、工程、报告的路径和本次建议。"""
     stage = "检查输入"
@@ -80,6 +82,8 @@ def run_pipeline(
             current_inputs = snapshot_inputs(source, image_layer, photo_source, reference_source)
             if current_inputs != expected_inputs:
                 raise ValueError("工程、照片或参考作品已发生变化，请重新检查输入并确认预览")
+        if expected_import is not None:
+            verify_photo_import(expected_import, source, image_layer, photo_source)
         api_key = load_api_key()
 
         # 在请求前创建专属目录，确认目标可创建；exist_ok=False 拒绝抢占已有目录。
@@ -127,6 +131,8 @@ def run_pipeline(
             metadata["reference"] = reference_source
         if expected_inputs is not None:
             metadata["confirmed_inputs"] = expected_inputs
+        if expected_import is not None:
+            metadata["photo_import"] = expected_import
         save_result(analysis_path, result, metadata)
         analysis_saved = True
 
@@ -136,6 +142,8 @@ def run_pipeline(
             current_manifest_hash = hashlib.sha256((source / "manifest.json").read_bytes()).hexdigest()
             if current_manifest_hash != expected_inputs["manifest_sha256"]:
                 raise ValueError("原工程配置在分析期间发生变化，已停止执行；请重新检查输入")
+        if expected_import is not None:
+            verify_photo_import(expected_import, source, image_layer, photo_source)
         project_path, report_path = apply_saved_analysis(
             analysis_path, source, project_path
         )
