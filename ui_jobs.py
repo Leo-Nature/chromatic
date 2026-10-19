@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 from compositor_tool import get_project_image
 from main import encode_photo
+from output_layout import input_directory, result_directory
 from photo_project import create_photo_project, verify_photo_import
 from refine_agent import (
     load_previous_state, read_verified_preview, required_path, run_refinement, snapshot_previous,
@@ -59,7 +60,7 @@ def prepare_job(source_path, instruction, output_root, reference_bytes=None):
         raise ValueError("界面结果目录不能位于原工程内部")
     image_url, photo_source = encode_photo(image_path)
     job_id = uuid.uuid4().hex
-    job_dir = root / "ui-inputs" / job_id
+    job_dir = input_directory(root, job_id)
     job_dir.mkdir(parents=True, exist_ok=False)
     return save_prepared_job(
         source, image_layer, image_url, photo_source, instruction, root, job_dir,
@@ -73,7 +74,7 @@ def prepare_photo_job(photo_bytes, instruction, output_root, reference_bytes=Non
     if not isinstance(photo_bytes, bytes) or not photo_bytes or len(photo_bytes) > MAX_PHOTO_BYTES:
         raise ValueError("请上传非空 JPEG/PNG 原照片，文件大小不超过 50 MiB")
     root = Path(output_root).expanduser().resolve()
-    job_dir = root / "ui-inputs" / uuid.uuid4().hex
+    job_dir = input_directory(root, uuid.uuid4().hex)
     job_dir.mkdir(parents=True, exist_ok=False)
     photo_path = job_dir / "photo-input"
     with photo_path.open("xb") as file:
@@ -121,7 +122,7 @@ def save_prepared_job(
         "reference_path": str(reference_path) if reference_path is not None else None,
         "preview_path": str(preview_path),
         "reference_preview_path": str(reference_preview_path) if reference_preview_path is not None else None,
-        "result_dir": str(root / f"ui-run-{date}-{job_dir.name[:8]}"),
+        "result_dir": str(result_directory(root, f"ui-run-{date}-{job_dir.name[:8]}")),
         "input_signature": signature,
         "expected_inputs": snapshot_inputs(source, image_layer, photo_source, reference_source),
     }
@@ -191,14 +192,14 @@ def prepare_feedback_job(report_path, feedback, output_root):
         if root == project or project in root.parents:
             raise ValueError("界面结果目录不能位于原工程或上一轮结果工程内部")
     job_id = uuid.uuid4().hex
-    job_dir = root / "ui-feedback-inputs" / job_id
+    job_dir = input_directory(root, job_id, feedback=True)
     date = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d-%H%M%S")
     job = {
         "job_dir": str(job_dir), "source_path": str(source),
         "previous_report": str(report_file), "feedback": feedback.strip(),
         "input_signature": feedback_signature(report_file, feedback),
         "expected_previous": snapshot_previous(source, state),
-        "result_dir": str(root / f"ui-feedback-{date}-{job_id[:8]}"),
+        "result_dir": str(result_directory(root, f"ui-feedback-{date}-{job_id[:8]}")),
     }
     job_dir.mkdir(parents=True, exist_ok=False)
     with (job_dir / "prepared.json").open("x", encoding="utf-8") as file:

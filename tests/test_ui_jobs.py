@@ -67,6 +67,8 @@ class UIJobTests(unittest.TestCase):
         key.assert_not_called()
         request.assert_not_called()
         previews = prepared_previews(job)
+        self.assertEqual(Path(job["job_dir"]).parent, self.outputs / "inputs/initial")
+        self.assertEqual(Path(job["result_dir"]).parent, self.outputs / "runs")
         self.assertEqual(set(previews), {"original", "reference"})
         self.assertEqual(hashlib.sha256(previews["original"]).hexdigest(), job["expected_inputs"]["preview_sha256"])
         self.assertEqual(hashlib.sha256(Path(job["reference_path"]).read_bytes()).hexdigest(),

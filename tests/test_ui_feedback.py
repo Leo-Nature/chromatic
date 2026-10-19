@@ -80,6 +80,8 @@ class UIFeedbackTests(unittest.TestCase):
         request.assert_not_called()
         self.assertEqual(job["source_path"], str(self.source))
         self.assertEqual(job["previous_report"], str(self.initial[2]))
+        self.assertEqual(Path(job["job_dir"]).parent, self.outputs / "inputs/feedback")
+        self.assertEqual(Path(job["result_dir"]).parent, self.outputs / "runs")
         state = job["expected_previous"]["state"]
         self.assertEqual(state["previous_report_sha256"], hashlib.sha256(self.initial[2].read_bytes()).hexdigest())
         self.assertEqual(state["previous_adjustment_plan"], self.initial_result["adjustment_plan"])

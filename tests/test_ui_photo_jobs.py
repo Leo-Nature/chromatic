@@ -71,6 +71,8 @@ class UIPhotoJobTests(unittest.TestCase):
         key.assert_not_called()
         request.assert_not_called()
         imported = job["expected_import"]
+        self.assertEqual(Path(job["job_dir"]).parent, self.outputs / "inputs/initial")
+        self.assertEqual(Path(job["result_dir"]).parent, self.outputs / "runs")
         self.assertEqual(Path(imported["photo_path"]).read_bytes(), self.photo)
         self.assertEqual(imported["photo_sha256"], hashlib.sha256(self.photo).hexdigest())
         report = json.loads(Path(imported["report_path"]).read_bytes())
@@ -96,7 +98,7 @@ class UIPhotoJobTests(unittest.TestCase):
             with patch("ui_jobs.MAX_PHOTO_BYTES", 10), self.assertRaisesRegex(ValueError, "50 MiB"):
                 self.prepare()
         request.assert_not_called()
-        self.assertFalse(list(self.outputs.glob("ui-run-*")))
+        self.assertFalse(list((self.outputs / "runs").glob("ui-run-*")))
 
     def test_both_modes_submit_once_with_import_provenance_and_same_preview(self):
         for use_reference in (False, True):
@@ -222,11 +224,11 @@ class UIPhotoJobTests(unittest.TestCase):
             self.assertFalse(page.exception)
             self.assertFalse(page.button(key="submit_job").disabled)
             self.assertEqual(len(page.image), 2)
-            sources = list(self.outputs.glob("ui-inputs/*/source.comp"))
+            sources = list(self.outputs.glob("inputs/initial/*/source.comp"))
             self.assertEqual(len(sources), 1)
             page.run()
             page.button(key="refresh_records").click().run()
-            self.assertEqual(list(self.outputs.glob("ui-inputs/*/source.comp")), sources)
+            self.assertEqual(list(self.outputs.glob("inputs/initial/*/source.comp")), sources)
         request.assert_not_called()
 
     def test_ui_photo_reference_text_and_mode_changes_remove_submit(self):

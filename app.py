@@ -12,6 +12,7 @@ import streamlit as st
 
 from apply_analysis import load_verified_analysis
 from compositor_tool import get_project_image
+from output_layout import default_source_project, report_candidates
 from refine_agent import read_verified_preview, required_path
 from run_agent import PipelineError
 from ui_jobs import (
@@ -46,9 +47,8 @@ def read_report(path):
 
 
 def discover_reports(output_dir):
-    """只查 outputs 根目录及下一层，不递归读取大型 .comp 图片目录。"""
-    root = Path(output_dir).resolve()
-    paths = set(root.glob("*.report.json")) | set(root.glob("*/*.report.json"))
+    """兼容新分类和旧目录，按限定深度发现报告，不扫描图片资源。"""
+    paths = report_candidates(output_dir)
 
     def created_at(path):
         try:
@@ -57,8 +57,7 @@ def discover_reports(output_dir):
         except (ValueError, OSError):
             return ""
 
-    return sorted((p for p in paths if p.is_file() and p.resolve().is_relative_to(root)),
-                  key=lambda p: (created_at(p), str(p)), reverse=True)
+    return sorted(paths, key=lambda p: (created_at(p), str(p)), reverse=True)
 
 
 def report_label(path, output_dir):
@@ -170,7 +169,7 @@ def render_new_job(root):
                 st.caption("最多 50 MiB、8000 万像素。检查时保存原文件副本，并建立全尺寸原始工程。")
             else:
                 source_text = st.text_input(
-                    "原工程路径", value=str(PROJECT_DIR / "outputs/test-photo-source.comp"),
+                    "原工程路径", value=str(default_source_project(root)),
                     help="填写本机 .comp 原工程目录。照片仍从工程中读取。", key="new_source",
                 )
             instruction = st.text_area(

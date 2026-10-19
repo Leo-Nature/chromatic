@@ -2,7 +2,7 @@
 
 Chromatic 是一个基于 Compositor 的 AI 照片调色学习项目，目标是让 AI 分析照片、解释调色建议，并生成可以继续编辑的调整结果。项目同时用于学习如何构建 Agent。
 
-当前处于原型阶段：工程同源分析、四项基础调色、连续反馈、结果查看器、界面初次调色及当前选中版本的反馈提交，均已通过本次样片的用户验收。105 项离线测试通过，初次调色和反馈界面分别完成页面真实调用。独立照片建工程工具与页面原照片上传入口均已通过本次样片的用户验收；上传入口完成一次真实双图分析与四项调色，Light/Dark 主题显示修复也已获用户确认。自动结果渲染尚未实现，参数幅度仍需后续校准。
+当前处于原型阶段：工程同源分析、四项基础调色、连续反馈、结果查看器、界面初次调色及当前选中版本的反馈提交，均已通过本次样片的用户验收。128 项离线测试通过，初次调色和反馈界面分别完成页面真实调用。独立照片建工程工具与页面原照片上传入口均已通过本次样片的用户验收；上传入口完成一次真实双图分析与四项调色，Light/Dark 主题显示修复也已获用户确认。已完成一次用户协助的 Compositor 原生 PNG 导出及文件检查，用户已确认本次成片与画布的颜色一致；自动结果渲染尚未实现，参数幅度仍需后续校准。
 
 ## 功能目标与验收标准
 
@@ -47,10 +47,85 @@ Chromatic 是一个基于 Compositor 的 AI 照片调色学习项目，目标是
 | 模型分析 | DeepSeek 返回中文分析及曝光、对比度、冷暖、饱和度建议 | 格式及数值检查不能保证审美正确 |
 | 来源校验 | 分析记录绑定工程图片图层 ID、资源引用和原图 SHA-256；复制前后核对原图 | 检查字节及引用一致性，不认证模型建议，也不等同于合成画面一致 |
 | 调整执行 | 工程副本中设置 Color Balance、AI Exposure、AI Contrast 和 AI Saturation 图层，保存执行记录 | 不自动渲染或评估；本次样片的四项执行已验收，参数映射仍需后续校准 |
+| 原生成片导出 | 用户协助通过 Compositor 的 Export PNG 导出一张全尺寸成片，保存检查记录 | 文件检查及本次颜色一致性验收通过；尚未自动化或接入网页 |
 | 参考作品 | 可选 JPEG/PNG 参考、双预览、风格描述和迁移理由，已完成真实运行 | 本次四项基础执行已验收，不代表完整风格迁移 |
 | 用户反馈 | 读取上轮报告与分析，结合文字反馈生成完整新方案，从同一原工程生成新版本 | 连续反馈及第二次回调已通过本次样片验收；模型未收到调整后成片，不自动评估结果 |
 
 这是由 Python 安排顺序的固定工作流程；现支持人工反馈后再次请求模型，但模型暂不自行选择工具或观察渲染结果继续迭代。
+
+## 输出目录规范（已通过用户验收）
+
+目录规范由 `output_layout.py` 集中定义，网页新任务使用以下位置：
+
+```text
+outputs/
+├── sources/                    独立原始工程与导入记录的分类位置
+├── inputs/
+│   ├── initial/<任务ID>/       初次任务的上传材料、预览和确认记录
+│   └── feedback/<任务ID>/      反馈确认记录
+├── runs/
+│   ├── ui-run-<时间>-<任务ID>/        初次调色结果
+│   └── ui-feedback-<时间>-<任务ID>/   反馈结果
+├── experiments/                早期实验的分类位置
+└── checks/
+    └── migration-previews/     本步骤的迁移预演与验证记录
+```
+
+路径函数只返回位置，不预先创建全部目录。网页实际准备任务时才创建对应的输入目录，提交流程创建新结果目录。上传照片生成的 `source.comp` 和 `source.import.json` 继续跟该次上传材料一起保存在 `inputs/initial/<任务ID>/`，保证来源材料集中；`sources/` 用于独立原始工程，不复制上传任务的工程。独立命令行工具仍尊重明确填写的 `--output`，本步骤没有自动重写用户指定路径。
+
+历史文件已经按分类迁移，网页新任务继续使用同一套规则。页面仍兼容旧根目录与旧任务，并查找 `runs/<任务>/`、`experiments/` 和 `experiments/<实验>/` 中的报告，不递归扫描图片资源、输入材料与检查记录。当前默认原工程位于 `outputs/sources/test-photo-source.comp`；如果另一个本地副本仍使用旧布局，路径函数也支持回退。
+
+下文历史步骤中的叙述保留当时路径；命令示例与本次成片入口已更新。查找旧文件时，可在外部备份目录的 `MIGRATION.md` 和 `journal.json` 中对照原位置与新位置。浏览器中尚未提交的旧确认可能仍保留旧路径，迁移后应重新打开页面并重新检查输入或反馈，不自动重放提交。
+
+### 第一步：只读迁移预演（已通过用户检查）
+
+`preview_output_migration.py` 的输入是现有输出目录；处理过程是分类已知顶层条目、读取文件指纹、扫描 JSON 中的路径及指纹字段，输出 JSON 和 Markdown 两份预演报告。Markdown 是便于阅读的文本格式，JSON 保留完整字段位置供后续程序核对。工具没有 `--apply` 参数，不执行移动、历史 JSON 改写或指纹重算。
+
+本次已执行：
+
+```bash
+uv run preview_output_migration.py --root outputs --output outputs/checks/migration-previews/2026-10-19/plan.json
+```
+
+阅读版为同目录 `plan.md`，机器可读版为 `plan.json`；再次运行须换新名称，已有预演文件不会被命令覆盖。预演只允许写到 `checks/migration-previews/` 内，其自身报告不作为下一次预演的运行依赖。
+
+本次建议迁移 29 个顶层条目、155 个文件，涉及 53 份 JSON、306 处待审查路径字段及 182 处应保留原值的历史字段。未发现未知顶层项目、目标冲突或无法读取的 JSON，但存在两处当前不存在的运行路径候选：早期 `run-natural-warm` 报告中已缺失的结果工程，以及一份旧准备记录指向的尚未生成结果目录。预演会列明，不补造文件，也不把这类记录当作已通过来源核对。
+
+文件指纹是根据字节计算的。改写分析 JSON 的路径，会改变该 JSON 的指纹，引用它的报告及后续反馈记录也需要按依赖核对更新；原照片与未改动资源的指纹应保持不变。历史审计快照保留过去的位置与指纹，不能全局替换路径。预演工具本身只列出这些字段，不负责更新指纹、执行迁移或恢复；实际施工由下一节的独立迁移工具完成。
+
+8 项新增测试覆盖新旧报告查找、排除资源与检查材料、默认原工程回退、只读预演、路径边界、未来输出、历史快照、目标冲突、未知项、符号链接、无效 JSON 与覆盖保护；已有页面任务测试增加新目录断言，并在新布局下验证单次提交、来源检查、真实上传控件及反馈交互。连同原有 105 项共 113 项离线测试通过，模型均使用模拟返回。以上是第一步已验收的预演与测试结果；第一步未移动历史文件。后续真实迁移结果见下一节，不将预演本身当作执行记录。
+
+第一步预演时的旧数据复查确认：156 个既有输出文件的指纹全部未变，17 份报告的发现顺序、读取及反馈来源核对结果与修改前一致（15 份可读取，11 份通过完整反馈来源核对；早期不兼容记录保持原状）。Streamlit AppTest 加载实际本地输出，切换初次调色与反馈两份已验收记录，无页面异常或错误，默认工程正确回退到旧位置。检查没有点击准备或提交按钮，没有模型用量；`test.py` 暂存内容、原照片与参考照片保持不变。详细检查及旧文件指纹保存在本地 `outputs/checks/migration-previews/2026-10-19/verification.json`；第一步新增的本地输出仅为该目录下的三份预演与验证文件。这些预演记录与指纹是迁移前历史快照，后续保留原值。
+
+### 第二步：历史目录迁移（已通过用户验收）
+
+2026-10-19 按用户授权，实现并测试 `migrate_outputs.py`，备份后执行真实迁移。该工具的输入为输出根目录、已检查的预演文件，以及尚不存在的项目外备份目录；处理分为核对、内存计算、完整备份、移动与改写、前后校验五个环节，输出迁移后的分类目录和外部日志。
+
+1. 重新扫描并与预演逐项比较，遇到未知项目、同名目标、符号链接或文件变化即停止。
+2. 核对已有 JSON 指纹，按“导入记录 → 分析 → 执行报告 → 后续反馈”的依赖顺序计算新内容。配对的路径和原指纹不符、指纹指向不明确或出现依赖循环时停止，不借整理修复不可信记录。未变化的记录保留原字节；工程内部配置不允许改写。
+3. 独立复制整个输出目录，核对备份的文件指纹及空目录。备份不是硬链接；新 JSON 另存在 `rewritten-json/`，保留新旧内容。
+4. 按清单移动整个目录，并按依赖顺序改写 JSON。每次操作前记录外部日志，JSON 使用同目录临时文件写完后替换，避免把半段 JSON 当成成功结果。
+5. 核对所有文件与新指纹，再复用正式历史查看、反馈来源和照片导入检查，与迁移前结果比较。普通异常时尝试恢复原布局；严重磁盘故障或并发修改可能让恢复停止，完整备份和日志继续保留。
+
+本次执行：
+
+```bash
+.venv/bin/python migrate_outputs.py migrate --root outputs --plan outputs/checks/migration-previews/2026-10-19/plan.json --backup /Users/leo-nature/workspace/chromatic-output-archives/migration-2026-10-19-9417cb3a
+```
+
+上述命令已经完成，不要直接重跑。外部备份目录包含 `original-outputs/`、`rewritten-json/`、`journal.json`、`post-checks.json`、`MIGRATION.md` 及 `README.before-migration.md`。其中 `MIGRATION.md` 是阅读版位置映射与恢复说明；`journal.json` 保存逐文件指纹、改写顺序及前后来源检查。完整备份额外占用约 `879 MiB`，本次整理不以释放磁盘空间为目标。
+
+真实结果：29 个顶层条目迁入分类目录，原有 159 个文件均保留；52 份 JSON 更新路径及依赖指纹，107 个文件保持原字节，包含全部图片、预览与工程配置。`outputs/` 可见顶层只保留 `sources/`、`inputs/`、`runs/`、`experiments/`、`checks/` 五类，隐藏的 `.DS_Store` 没有删除。
+
+17 份历史报告均可被发现，其中 15 份可读取、11 份通过完整反馈来源核对；早期不兼容记录维持原状态。两处原本缺失的路径仍然缺失，只更新其分类位置，不补造工程或执行任务。上传照片分析和准备记录的两份导入来源检查通过；迁移后再次计算，没有剩余路径或 JSON 指纹更新。历史审计快照、旧归档记录、过去的 `relocations` 和预演报告保留原值；它们描述过去位置，当前成片以迁移后导出记录的 `verification.output.path` 为准。
+
+15 项新增临时目录测试覆盖连续反馈指纹链、上传来源、历史快照、空目录、移动与改写失败后的自动恢复、进程在移动间中断后的恢复，以及旧预演、错误指纹、依赖歧义、目标冲突、后续新增或修改、备份损坏与备份位置保护。连同原有 113 项共 128 项离线测试通过，模型均使用模拟返回。使用 Streamlit AppTest 对实际迁移后的数据切换初次调色及反馈版本，参数正确、无页面异常；默认工程使用新位置。另在临时任务目录准备一次真实历史结果的反馈，确认上传原工程路径正确，全程未调用模型。
+
+原照片、参考照片、`test.py`、外部原始 `demo.comp` 和上一轮归档文件共 36 个保护文件的指纹未变，`test.py` 暂存内容及 Git 提交未变。本步骤未永久删除、调用真实模型、提交或推送 Git。真实数据没有为了测试而反复恢复，恢复功能只在临时目录验证。
+
+2026-10-19 用户已检查目录分类与迁移后的网页，确认验证通过。目录预演、历史迁移和迁移后页面使用均已获本次用户验收；已有生成日志保留生成时的状态，人工验收记在本文中，不为更新验收状态而改写历史文件指纹。
+
+如确需恢复，先停止页面提交和工程编辑，再参考备份目录中的 `MIGRATION.md`，使用 `restore --root outputs --backup <本次备份目录>`。工具会先核对当前文件与备份；迁移后有新任务、文件修改、缺失或冲突时拒绝覆盖。恢复只处理输出文件，不回退代码、Git 或 README；旧 README 仅供对照，不直接覆盖后续修改。迁移后请重新打开页面并重新检查尚未提交的输入，浏览器内存中的旧确认不会自动改写。
 
 ## 环境与输入工程
 
@@ -69,12 +144,12 @@ Compositor 工程需要：
 - 包含且仅包含一个名为 `Test Color Balance` 的 Color Balance 调整图层。
 - 图片资源必须能解码为 JPEG 或 PNG，当前最多 8000 万像素。
 
-本地正确示例为 `outputs/test-photo-source.comp`，画面是红色遮阳伞和冰柜，图片图层名为 `test`。工程及照片未纳入版本管理，克隆仓库后需自行准备对应工程。本阶段读取原始图片资源，不处理裁剪、蒙版、多个图层、已有调整形成的最终合成观感。
+本地正确示例现位于 `outputs/sources/test-photo-source.comp`，画面是红色遮阳伞和冰柜，图片图层名为 `test`。工程及照片未纳入版本管理，克隆仓库后需自行准备对应工程。本阶段读取原始图片资源，不处理裁剪、蒙版、多个图层、已有调整形成的最终合成观感。
 
 ## 照片建工程工具（独立命令与页面共用）
 
 ```bash
-uv run photo_project.py --input test.jpg --output outputs/my-photo.comp
+uv run photo_project.py --input test.jpg --output outputs/sources/my-photo.comp
 ```
 
 输入 JPEG/PNG，输出一个尚不存在的 `.comp` 工程和同名 `.import.json` 导入记录；不读取密钥、不请求模型、不执行调色。可使用任意照片路径，格式依据内容判定。示例照片属于本地材料，克隆仓库后需要自行准备；输出名称已存在时必须换新名称。
@@ -103,7 +178,7 @@ uv run photo_project.py --input test.jpg --output outputs/my-photo.comp
 本次真实命令为：
 
 ```bash
-uv run photo_project.py --input test.jpg --output outputs/photo-import-test.comp
+uv run photo_project.py --input test.jpg --output outputs/sources/photo-import-test.comp
 ```
 
 已生成 `outputs/photo-import-test.comp` 和 `outputs/photo-import-test.import.json`。工程 PNG 为 `4672 × 7008`，约 `39.88 MiB`；逐像素核对与同一次规范化逻辑读取的输入一致，未缩小。图片资源、图层引用、配置和来源指纹核对通过，127 个既有文件保持原样；没有调用真实模型。三份真实照片的原有模型预览字节和完整来源元数据也与重构前一致。
@@ -125,7 +200,7 @@ uv run streamlit run app.py --server.address 127.0.0.1 --server.port 8501 --serv
 
 页面支持右上角菜单中的 System、Light 和 Dark 主题。自定义 CSS 只设置排版、间距与圆角，背景和文字沿用 Streamlit 当前主题；已移除固定浅色背景，避免 Dark 模式出现浅色文字叠浅色底的问题。本次修复通过真实浏览器菜单切换 Light/Dark，检查了标题、侧栏、按钮、输入框、参数和标签页；检查未调用模型或新增任务。用户已确认主题显示正常。检查截图与颜色记录位于本地 `outputs/viewer-check/dark-fixed.png`、`dark-form-fixed.png`、`light-fixed.png`、`light-form-fixed.png` 及 `theme-check.json`。
 
-左侧从 `outputs/` 根目录及下一层发现 `*.report.json`，按记录时间从新到旧排列，标签显示上海时区时间、阶段和相对路径。默认选择最新记录，切换和刷新使用当前会话保存选择。页面提供：
+左侧兼容旧输出位置及上述新分类目录发现 `*.report.json`，按记录时间从新到旧排列，标签显示上海时区时间、阶段和相对路径。默认选择最新记录，切换和刷新使用当前会话保存选择。页面提供：
 
 - 原照片分析预览及可选参考作品预览；核对预览指纹后读取，不重新生成图片。
 - 原始修图要求、本轮反馈、中文分析、参考风格和借鉴理由。
@@ -144,7 +219,7 @@ uv run streamlit run app.py --server.address 127.0.0.1 --server.port 8501 --serv
 
 ### 页面新建调色（支持上传照片或使用已有工程）
 
-1. 展开“新建调色”，选择输入方式并填写修图要求。默认“上传原照片”，支持单张 JPEG/PNG，最多 50 MiB、8000 万像素；也可选择“使用已有工程”填写本机 `.comp` 原工程路径，默认路径仍为本地已验收的 `outputs/test-photo-source.comp`。
+1. 展开“新建调色”，选择输入方式并填写修图要求。默认“上传原照片”，支持单张 JPEG/PNG，最多 50 MiB、8000 万像素；也可选择“使用已有工程”填写本机 `.comp` 原工程路径。默认工程优先新分类位置，若使用旧布局则回退到 `outputs/test-photo-source.comp`。
 2. 可选上传 JPEG/PNG 参考作品（支持截图），上限 20 MiB；留空时走原照片自动分析模式。文件内容由已有预处理验证，不依赖上传文件名判断格式。
 3. 点击“检查输入并预览”。此动作不读取密钥、不调用模型；上传模式先保存原文件副本并建立全尺寸原始工程，再从工程读取图片。两种模式共用单图片工程检查、原照片与参考预览准备。
 4. 确认预览后点击“开始分析并调色”。仅此提交会向 DeepSeek 发送分析输入并产生 API 用量。界面显示检查输入、请求模型、校验保存、生成工程四阶段，不提供时间估计。
@@ -152,11 +227,11 @@ uv run streamlit run app.py --server.address 127.0.0.1 --server.port 8501 --serv
 
 为便于学习，页面操作和任务执行分开：`app.py` 负责控件与显示，`ui_jobs.py` 负责准备和提交，再调用已有 `run_pipeline`，调色算法和模型输出格式保持不变。原有命令行继续兼容，新增的 `progress_callback`、`expected_inputs` 及上传模式的 `expected_import` 都是可选参数。
 
-“输入快照”记录原工程路径、manifest 指纹、图片图层引用、原照片及参考原文件与预览的指纹。快照与预览保存在 `outputs/ui-inputs/<任务ID>/`，可选参考原字节保存在固定内部文件名 `reference-input`。修改路径、要求或上传内容会使页面准备状态失效，必须重新检查。提交时核心流程重新生成预览并比较快照，确认与页面预览一致后才允许请求模型；分析期间原 manifest 变化也会在执行前停止。该核对不等同于对整个工程的并发锁定。
+“输入快照”记录原工程路径、manifest 指纹、图片图层引用、原照片及参考原文件与预览的指纹。新快照与预览保存在 `outputs/inputs/initial/<任务ID>/`，可选参考原字节保存在固定内部文件名 `reference-input`。修改路径、要求或上传内容会使页面准备状态失效，必须重新检查。提交时核心流程重新生成预览并比较快照，确认与页面预览一致后才允许请求模型；分析期间原 manifest 变化也会在执行前停止。该核对不等同于对整个工程的并发锁定。
 
 每份快照在网络请求前通过独占创建 `submitted.json` 标记一次尝试。普通页面重运行、刷新和重复点击不会再次提交同一快照；失败或中断后也不自动重试。标记存在不代表成功，成功以新报告为准。再次运行需要重新点击“检查输入并预览”，形成新快照后再明确提交。关闭/刷新浏览器可能丢失页面会话状态，本地快照和结果仍保留，不自动恢复或重放网络任务。
 
-输出使用自动生成的唯一 `outputs/ui-run-<日期时间>-<任务ID>/`，不覆盖旧结果；分析元数据中的 `confirmed_inputs` 保留已确认快照。所有这些本地材料均被 `outputs/` 忽略规则排除。
+新输出使用自动生成的唯一 `outputs/runs/ui-run-<日期时间>-<任务ID>/`，不覆盖旧结果；分析元数据中的 `confirmed_inputs` 保留已确认快照。所有这些本地材料均被 `outputs/` 忽略规则排除。
 
 本次已通过实际浏览器完成一次双图分析，原工程为冰柜照片，上传参考为 `model.jpg`，要求是借鉴暖色及红色氛围、保留明亮感和主体细节、避免过度饱和。结果位于 `outputs/ui-run-20261018-143401-aababb9f/`：
 
@@ -175,7 +250,7 @@ uv run streamlit run app.py --server.address 127.0.0.1 --server.port 8501 --serv
 
 选择“上传原照片”，上传原照片及可选参考作品，填写要求后检查预览；确认后再明确提交。切换输入方式、更换或清除图片、改变参考图或要求都会清除旧确认。按文件内容识别输入，不使用上传文件名拼接路径；文件名不同但内容相同不视作新的内容。查看、上传、刷新和检查均不请求模型，只有“开始分析并调色”发起请求。
 
-`prepare_photo_job` 调用已验收的 `create_photo_project`，再与已有工程入口共用 `save_prepared_job` 保存参考预览、工程来源快照与提交信息。上传模式在同一个 `outputs/ui-inputs/<任务ID>/` 中额外保存：
+`prepare_photo_job` 调用已验收的 `create_photo_project`，再与已有工程入口共用 `save_prepared_job` 保存参考预览、工程来源快照与提交信息。上传模式在同一个 `outputs/inputs/initial/<任务ID>/` 中额外保存：
 
 - `photo-input`：上传原文件的完整原字节，内部固定文件名，无扩展名；格式依内容识别。
 - `source.comp`：全尺寸、中性原始工程，后续反馈也使用它作为起点。
@@ -184,7 +259,7 @@ uv run streamlit run app.py --server.address 127.0.0.1 --server.port 8501 --serv
 
 `verify_photo_import` 核对上传副本、导入记录、图片引用、资源指纹、画布尺寸及原工程配置。`run_pipeline` 在请求模型前和保存分析后、执行前各核对一次，并把确认信息保存到分析元数据的 `photo_import`。已有 `confirmed_inputs` 继续绑定实际分析的工程资源和参考图。来源变化时停止，已生成的分析保留；这些检查不等于全程文件锁定。
 
-上传后的成功结果仍位于唯一的 `outputs/ui-run-<日期时间>-<任务ID>/`，继续使用原有单次提交标记、四阶段提示、自动选择新版本、查看与反馈入口。反馈从上传生成的 `source.comp` 开始，不把已调色结果当作原图。更换输入后会保留旧上传副本和工程；失败产生的部分文件也保留，不自动清理，磁盘占用会随任务增加。
+上传后的新成功结果位于唯一的 `outputs/runs/ui-run-<日期时间>-<任务ID>/`，继续使用原有单次提交标记、四阶段提示、自动选择新版本、查看与反馈入口。反馈从上传生成的 `source.comp` 开始，不把已调色结果当作原图。更换输入后会保留旧上传副本和工程；失败产生的部分文件也保留，不自动清理，磁盘占用会随任务增加。
 
 本次已通过实际浏览器上传本地 `test.jpg` 和参考 `model.jpg`，要求借鉴暖色与红色氛围、保留明亮感及主体细节、避免过度饱和。只进行一次真实 DeepSeek 调用，结果为：
 
@@ -207,6 +282,43 @@ uv run streamlit run app.py --server.address 127.0.0.1 --server.port 8501 --serv
 
 用户已确认原照片上传入口的功能正常，两种输入方式、上传与预览、确认和提交，以及本次结果工程均已通过验收；随后反馈的 Dark 模式显示问题也已修复并获确认。验收结论限于本次样片与检查范围。复查时可直接查看上述已有结果，无需再次付费提交；页面图片仍是分析输入，调色成片继续在 Compositor 中查看，自行提交会产生新的 API 用量。
 
+### 原生成片导出验证（本次颜色一致性已验收）
+
+2026-10-18 使用本机 Compositor `1.5.3 (49)`，从已验收的 `outputs/runs/ui-run-20261018-194540-07479221/result.comp` 导出 PNG。界面控制工具打开目标工程后持续返回失效菜单，无法可靠操作保存窗口，因此本次由用户重新打开指定工程，通过 `File → Export PNG…`（`⇧⌘E`）完成保存，再由 Python 检查文件。这是一次原生导出验证，尚未实现无人操作的导出流程。
+
+- 成片：`outputs/runs/ui-run-20261018-194540-07479221/result.png`（整理后保留的同字节副本）。
+- 导出检查记录：`outputs/checks/native-export-check/export-record.json`。
+- 对应执行报告：`outputs/runs/ui-run-20261018-194540-07479221/result.report.json`。
+- 对应原始工程：`outputs/inputs/initial/074792213e4c4630a53ff4ed20cad44b/source.comp`。
+- 四项最终参数：冷暖 `0.15`、曝光 `0 EV`、对比度 `0.1`、饱和度 `0.1`。
+
+PNG 文件签名及完整解码检查通过，尺寸为 `4672 × 7008`，与结果工程画布一致；文件为每通道 8 位 RGBA，所有像素完全不透明，包含 PNG 的 `sRGB` 色彩标记，大小为 `54,139,216` 字节（约 `51.63 MiB`）。它是合并调整图层后的成片，工程内部 `images/` 中的 PNG 仍是未叠加调整的原始资源。两者 RGB 像素确有差异；这一检查只证明像素不同，不证明调色算法、具体参数或审美正确。
+
+复用 `load_previous_state` 核对分析、报告、原工程、照片引用、结果工程四项工具设置及顺序，通过后将工程配置、报告、资源和成片的 SHA-256 保存到导出记录。SHA-256 是检查文件字节是否变化的指纹。导出前记录的 176 个既有文件均未改变，Git 提交及 `test.py` 暂存内容保持不变。PNG 本身不包含可供本项目验证的工程路径与完整图层配置；本次来源关联依据指定路径、用户完成原生导出的确认，以及文件与工程记录核对，不构成自动渲染一致性的证明。
+
+2026-10-19 用户确认“导出的颜色没有什么不一样”，本次颜色一致性验收通过。导出记录已补充用户确认，状态更新为 `native_export_user_reviewed`，不代表程序自动逐像素认证。导出步骤没有调用模型、接入网页、修改业务代码、提交或推送 Git；只更新说明并新增本地导出与检查文件，生成文件继续由 Git 忽略。
+
+### 输出目录整理（先归档，不永久删除）
+
+2026-10-19 按用户授权，将以下生成文件移到项目外的本地目录 `/Users/leo-nature/workspace/chromatic-output-archives/2026-10-19-d7568cf7/`，保留原有相对目录结构：
+
+| 归档前的位置 | 内容与原因 |
+| --- | --- |
+| `outputs/saturation-tests/` | 已完成验收的三份固定饱和度实验工程及目录附属文件 |
+| `outputs/exposure-tests/` | 已完成验收的三份固定曝光实验工程及目录附属文件 |
+| `outputs/contrast-tests/` | 已完成验收的三份固定对比度实验工程及目录附属文件 |
+| `outputs/native-export-check/result.png` | 与任务目录中保留的 PNG 字节完全相同的重复副本 |
+
+归档清单位于上述目录的 `manifest.json`，逐项保存原路径、归档路径、大小及 SHA-256；`metadata/` 保留整理前说明、导出记录和检查基线，供恢复与对照。移动使用同一文件系统内的重命名，未重新编码图片，也没有永久删除。本次移出 22 个文件，约 `451.43 MiB`；项目输出目录占用减少，但归档仍在本机，因此没有释放对应磁盘空间。
+
+保留任务目录中的 PNG，并把 `outputs/native-export-check/export-record.json` 的成片路径改为该保留位置，附上原路径、归档副本位置和文件指纹。首次导出检查中的既有文件指纹是历史快照，不改写；后续位置变化通过归档映射记录。原照片、原始工程、正式调色工程、分析、执行报告、反馈链、输入预览及 `tests/` 自动化测试代码保留。
+
+归档前检查未发现其他任务 JSON 依赖三组固定实验工程；唯一需要更新的运行记录引用是导出记录中的重复 PNG 路径。下文三组固定实验表格保留归档前路径，作为已验收实验的历史说明；需要再次打开时，可对照归档清单找到实际位置。恢复时按清单逐项移回，目标已存在则停止，避免覆盖新文件；旧 README 和旧导出记录只供对照，不应直接覆盖后续修改。
+
+整理前后逐项对照，17 份历史报告的发现顺序、读取结果及反馈来源核对结果完全一致：15 份可读取，另两份是早期未绑定来源的记录，原本即无法作为新版结果查看；11 份通过完整四项反馈来源核对，其余旧记录的检查结果未变。22 个归档文件及整理前元数据备份的指纹一致，另外 185 个既有文件保持原样；仅 README 和导出记录按本步骤更新，`test.py` 暂存内容及 Git 提交未变。
+
+使用 Streamlit AppTest 加载实际本地输出，切换已验收的初次调色与后续反馈版本，四项参数显示与对应记录一致，无页面异常或错误；检查时阻止模型请求函数执行，没有点击提交按钮。此检查覆盖页面运行和版本切换，不代替真实浏览器的外观验收；本步骤没有重跑整套 105 项测试。整理记录位于本地 `outputs/cleanup-records/2026-10-19-d7568cf7.json`，详细指纹清单和前后检查位于归档目录的 `manifest.json`、`checks.json`。
+
 ### 页面反馈调整（界面第三小步）
 
 1. 在左侧选择要修改的版本，先核对其四项参数和 Compositor 中的效果。
@@ -219,11 +331,11 @@ uv run streamlit run app.py --server.address 127.0.0.1 --server.port 8501 --serv
 
 页面确认同时绑定报告路径和反馈文字。切换版本或修改反馈会清除确认，不能沿用旧按钮提交；切换后再返回原版本也需要重新检查。缺少完整四项执行的历史记录、缺失预览或结果的记录只允许查看，不提供反馈提交。
 
-确认信息写入 `outputs/ui-feedback-inputs/<任务ID>/prepared.json`，包括报告/分析指纹、上一轮参数及原工程和旧结果的 manifest 指纹。核心流程在模型请求前重新核对，并在保存新分析后、执行前再次核对。变化时停止，已生成的预览或分析保留。这是变化检测，不是整个工程的文件锁或合成画面认证；主要工具已被手动修改时也会停止反馈。
+新确认信息写入 `outputs/inputs/feedback/<任务ID>/prepared.json`，包括报告/分析指纹、上一轮参数及原工程和旧结果的 manifest 指纹。核心流程在模型请求前重新核对，并在保存新分析后、执行前再次核对。变化时停止，已生成的预览或分析保留。这是变化检测，不是整个工程的文件锁或合成画面认证；主要工具已被手动修改时也会停止反馈。
 
 每份确认通过独占创建 `submitted.json` 只允许尝试一次。失败后显示阶段与原因，刷新不重放请求；再次尝试需要重新“检查反馈”并明确提交。关闭页面可能丢失会话状态，但本地记录保留，不提供后台任务自动恢复。
 
-新版本位于唯一的 `outputs/ui-feedback-<日期时间>-<任务ID>/`，分析元数据中的 `confirmed_previous` 保存确认快照。四项参数是相对于原工程的完整最终方案，从原工程生成副本，不在旧版本上叠加。模型仍只收到原照片、可选参考预览、原始要求、上一轮方案和本次文字反馈，未观察调色成片。
+新版本位于唯一的 `outputs/runs/ui-feedback-<日期时间>-<任务ID>/`，分析元数据中的 `confirmed_previous` 保存确认快照。四项参数是相对于原工程的完整最终方案，从原工程生成副本，不在旧版本上叠加。模型仍只收到原照片、可选参考预览、原始要求、上一轮方案和本次文字反馈，未观察调色成片。
 
 本次通过实际浏览器对已验收的 `outputs/ui-run-20261018-143401-aababb9f/result.report.json` 提交上述明确反馈，完成一次 DeepSeek 调用。生成：
 
@@ -243,7 +355,7 @@ uv run streamlit run app.py --server.address 127.0.0.1 --server.port 8501 --serv
 ## 推荐入口：从同一工程分析并调色
 
 ```bash
-uv run run_agent.py --input outputs/test-photo-source.comp --instruction "保持自然，稍微暖一点，不要过度饱和" --output outputs/my-project-run
+uv run run_agent.py --input outputs/sources/test-photo-source.comp --instruction "保持自然，稍微暖一点，不要过度饱和" --output outputs/runs/my-project-run
 ```
 
 统一入口不再接受 `--image`，避免分析照片和执行工程被分别选成不同画面。`--output` 是一个全新的结果目录，必须尚不存在。运行会上传分析预览到 DeepSeek，并产生 API 用量。
@@ -251,7 +363,7 @@ uv run run_agent.py --input outputs/test-photo-source.comp --instruction "保持
 成功结果结构：
 
 ```text
-outputs/my-project-run/
+outputs/runs/my-project-run/
 ├── analysis-preview.jpg
 ├── analysis.json
 ├── result.comp/
@@ -269,7 +381,7 @@ outputs/my-project-run/
 ## 可选参考作品：双图分析与基础调整
 
 ```bash
-uv run run_agent.py --input outputs/test-photo-source.comp --reference model.jpg --instruction "参考作品的暖色和暗部氛围，保留原图主体细节，不要为了接近参考图而过度压暗。" --output outputs/my-reference-run
+uv run run_agent.py --input outputs/sources/test-photo-source.comp --reference model.jpg --instruction "参考作品的暖色和暗部氛围，保留原图主体细节，不要为了接近参考图而过度压暗。" --output outputs/runs/my-reference-run
 ```
 
 `--reference` 可省略，省略时继续使用原有自动分析模式；指定时必须是能读取的 JPEG/PNG，截图也可使用。参考图缺失或无法解码时，在模型调用前停止。
@@ -296,7 +408,7 @@ uv run run_agent.py --input outputs/test-photo-source.comp --reference model.jpg
 查看四项组合结果后，可以引用其执行报告，提出修改要求。此入口需要上次四项均已执行的新版报告，不能使用早期只执行部分参数的报告。
 
 ```bash
-uv run refine_agent.py --previous-report outputs/reference-contrast.report.json --input outputs/test-photo-source.comp --feedback "有点太暖了，稍微冷一点，其他尽量保持。" --output outputs/my-feedback-run
+uv run refine_agent.py --previous-report outputs/experiments/reference-contrast.report.json --input outputs/sources/test-photo-source.comp --feedback "有点太暖了，稍微冷一点，其他尽量保持。" --output outputs/runs/my-feedback-run
 ```
 
 `--input` 必须是上一轮报告绑定的原工程，不能传入上一轮调色结果；`--output` 必须是新目录，且不能位于原工程或旧结果工程内部。示例中的原工程、照片及报告属于本地材料，未包含在仓库中。运行会发送原照片预览、可选参考预览、原修图要求、上一轮方案和反馈到 DeepSeek，产生 API 用量；模型调用参数继续使用 90 秒网络超时、关闭自动重试及原有输出限制。
@@ -352,7 +464,7 @@ uv run refine_agent.py --previous-report outputs/reference-contrast.report.json 
 只分析 JPEG/PNG，不生成调色工程：
 
 ```bash
-uv run main.py --image test.jpg --instruction "保持自然，稍微暖一点" --output outputs/standalone-analysis.json
+uv run main.py --image test.jpg --instruction "保持自然，稍微暖一点" --output outputs/experiments/standalone-analysis.json
 ```
 
 该入口使用相同的预览准备逻辑，但没有工程来源绑定，其结果不能交给新版执行入口直接调色。需要调色时使用统一入口重新生成工程绑定分析。
@@ -360,7 +472,7 @@ uv run main.py --image test.jpg --instruction "保持自然，稍微暖一点" -
 使用新版已保存分析重试执行，无需再次调用模型：
 
 ```bash
-uv run apply_analysis.py --analysis outputs/run-project-source/analysis.json --input outputs/test-photo-source.comp --output outputs/retry-result.comp
+uv run apply_analysis.py --analysis outputs/experiments/run-project-source/analysis.json --input outputs/sources/test-photo-source.comp --output outputs/experiments/retry-result.comp
 ```
 
 执行入口也不再接受 `--image`，而是从目标工程取图进行核对。缺少工程绑定或预览指纹的旧分析、图层引用不一致、图片内容不一致，都会被拒绝。工程和旁边的报告路径均须尚不存在。
@@ -368,7 +480,7 @@ uv run apply_analysis.py --analysis outputs/run-project-source/analysis.json --i
 人工指定冷暖的工具入口仍保留，用于独立实验：
 
 ```bash
-uv run compositor_tool.py --input outputs/test-photo-source.comp --output outputs/manual-warm.comp --warmth 0.5
+uv run compositor_tool.py --input outputs/sources/test-photo-source.comp --output outputs/experiments/manual-warm.comp --warmth 0.5
 ```
 
 它只验证参数和工程结构，不使用 AI 分析。正值预期偏暖，负值预期偏冷，映射幅度为 `round(warmth * 20)`。这是用于打通流程的实验映射，尚未校准，不能视为精确的色温转换；第二阶段再研究响应并改进。参数替换目标图层的设置，不是在原值上累加；零值只中和此调整图层。
@@ -378,7 +490,7 @@ uv run compositor_tool.py --input outputs/test-photo-source.comp --output output
 工具入口支持可选 `--saturation`，旧的仅冷暖调用继续兼容，省略该选项时不新增或修改饱和度图层。已有分析执行入口和统一入口现在执行方案中的四项基础调整。
 
 ```bash
-uv run compositor_tool.py --input outputs/test-photo-source.comp --output outputs/manual-saturation.comp --warmth 0 --saturation -0.3
+uv run compositor_tool.py --input outputs/sources/test-photo-source.comp --output outputs/experiments/manual-saturation.comp --warmth 0 --saturation -0.3
 ```
 
 饱和度建议范围 `[-1, 1]` 通过 `round(value * 100)` 对应编辑器 `[-100, 100]`。这是范围换算，不是视觉百分比，也没有完成样片校准。字段和图层类型依据 [Compositor 官方工程写入说明](https://github.com/robbietilton/Compositor/blob/main/docs/writing-comp-files.md) 与 [参数格式说明](https://github.com/robbietilton/Compositor/blob/main/docs/project-format.md)。
@@ -387,7 +499,7 @@ uv run compositor_tool.py --input outputs/test-photo-source.comp --output output
 
 若源工程已有工具管理的同名 Hue/Saturation 图层，则保留其 ID、替换 saturation、启用并移到最上方，不再新增一层，也不叠加旧数值；已有的其他设置保留。同名图层重复或类型冲突时停止，不覆盖其他图层。
 
-已生成检查用工程，三份都将冷暖设为零，以便单独比较饱和度：
+已生成并验收检查用工程，三份都将冷暖设为零，以便单独比较饱和度。以下为归档前路径；2026-10-19 已移到上述项目外归档目录：
 
 | 文件 | 建议值 | 写入值 |
 | --- | --- | --- |
@@ -402,7 +514,7 @@ uv run compositor_tool.py --input outputs/test-photo-source.comp --output output
 独立工具新增可选 `--exposure`，单位为 EV（曝光补偿档数），范围限制为 `[-2, 2]`。省略时不新增或修改曝光层；显式传 `0` 时生成或重置中性曝光层。原来的冷暖及饱和度调用继续兼容。
 
 ```bash
-uv run compositor_tool.py --input outputs/test-photo-source.comp --output outputs/manual-exposure.comp --warmth 0 --exposure 0.5
+uv run compositor_tool.py --input outputs/sources/test-photo-source.comp --output outputs/experiments/manual-exposure.comp --warmth 0 --exposure 0.5
 ```
 
 已核对 Compositor 公开源码，固定版本为 `365b5745eda537f984f3d5bed1e53c361dbc9c91`：[LayerAdjustment.swift](https://github.com/robbietilton/Compositor/blob/365b5745eda537f984f3d5bed1e53c361dbc9c91/Compositor/Document/LayerAdjustment.swift) 定义 `kind: Exposure` 和 `exposureSettings`；[ImageAdjustments.swift](https://github.com/robbietilton/Compositor/blob/365b5745eda537f984f3d5bed1e53c361dbc9c91/Compositor/Document/ImageAdjustments.swift#L35-L70) 定义 `exposure`、`offset`、`gamma`。曝光按 `2 ** exposure` 缩放线性光，再编码回显示值；编辑器曝光范围为 `[-20, 20]`，本项目仍限制在 `[-2, 2]`。这次只使用 EV，固定 `offset=0`、`gamma=1`。EV 不乘系数、不四舍五入，也不等同于直接乘 sRGB 像素数值；增加曝光可能使高光达到上限。公开源码核实不替代本机 Compositor 的实际加载与视觉验收。
@@ -411,7 +523,7 @@ uv run compositor_tool.py --input outputs/test-photo-source.comp --output output
 
 当前四项组合执行的工具顺序从底到顶为 `Test Color Balance → AI Exposure → AI Contrast → AI Saturation`；省略对比度的旧工具调用不新增该层。若已有同名 Exposure 层，复用 ID、启用并替换 `exposureSettings`，将 offset 和 gamma 恢复中性，不累加 EV；其他图层属性保留。同名重复、组或类型冲突时拒绝复制。当前是无蒙版、全画布工具层的基础执行方案，不承诺对用户自行改过蒙版、不透明度等配置仍产生相同效果。
 
-检查用固定工程都从原始冰柜工程生成，冷暖为零，不新增饱和度层，原有 Test Curves 保持关闭：
+检查用固定工程都从原始冰柜工程生成，冷暖为零，不新增饱和度层，原有 Test Curves 保持关闭。以下为归档前路径；2026-10-19 已移到上述项目外归档目录：
 
 | 文件 | 曝光 |
 | --- | --- |
@@ -422,7 +534,7 @@ uv run compositor_tool.py --input outputs/test-photo-source.comp --output output
 随后用已有参考分析执行三项调整，没有再次请求模型：
 
 ```bash
-uv run apply_analysis.py --analysis outputs/reference-model-run/analysis.json --input outputs/test-photo-source.comp --output outputs/reference-exposure.comp
+uv run apply_analysis.py --analysis outputs/experiments/reference-model-run/analysis.json --input outputs/sources/test-photo-source.comp --output outputs/experiments/reference-exposure.comp
 ```
 
 以上命令本次已经执行，输出和报告已存在，重试时须换新名称。已核对四份输出的参数、图层类型、唯一 ID、资源完整性及报告一致性；原工程、参考图和旧分析保持原样。曝光实际加载与效果已获用户确认。该版本保留三个工具层，`-0.1 EV` 的组合变化较轻微；新增对比度的四项组合验收见下节。
@@ -432,7 +544,7 @@ uv run apply_analysis.py --analysis outputs/reference-model-run/analysis.json --
 独立工具新增可选 `--contrast`，建议值范围为 `[-1, 1]`，不是百分比。省略时不新增或修改对比度层；显式 `0` 时创建或重置为中性曲线。旧的冷暖、饱和度和曝光调用继续兼容。
 
 ```bash
-uv run compositor_tool.py --input outputs/test-photo-source.comp --output outputs/manual-contrast.comp --warmth 0 --contrast 0.5
+uv run compositor_tool.py --input outputs/sources/test-photo-source.comp --output outputs/experiments/manual-contrast.comp --warmth 0 --contrast 0.5
 ```
 
 参数结构与插值方式依据固定版本的 [Compositor Curves.swift](https://github.com/robbietilton/Compositor/blob/365b5745eda537f984f3d5bed1e53c361dbc9c91/Compositor/Document/Curves.swift)：`curves.channel` 为 `RGB`，`channels` 依次是 RGB 总曲线、红、绿、蓝。每条曲线需有 2～32 个点，起止横坐标为 0 和 255，横坐标严格递增，横纵坐标均为有限数值且在 `[0, 255]` 内；允许小数。编辑器以保形三次 Hermite 插值平滑连接控制点，避免过冲。像素先经过单独颜色通道曲线，再经过 RGB 总曲线。
@@ -447,7 +559,7 @@ uv run compositor_tool.py --input outputs/test-photo-source.comp --output output
 
 新增独立 `AI Contrast` 曲线层，置于曝光之上、饱和度之下。沿用已有建层函数；不改动原来的 `Test Curves`。已有同名 Curves 层则复用 ID、替换整组曲线、恢复单独颜色通道中性，并启用该层，不累加；其他图层属性保留。同名重复、组、图片层或类型冲突时拒绝生成。与其他工具层一样，当前按未被用户改过蒙版和不透明度的全画布层验收。
 
-三份固定参数工程从原始冰柜工程生成，冷暖为零，不新增曝光和饱和度层，原来的 Test Curves 保持关闭：
+三份固定参数工程从原始冰柜工程生成，冷暖为零，不新增曝光和饱和度层，原来的 Test Curves 保持关闭。以下为归档前路径；2026-10-19 已移到上述项目外归档目录：
 
 | 文件 | 建议值 | 暗部点 / 亮部点 |
 | --- | --- | --- |
@@ -458,7 +570,7 @@ uv run compositor_tool.py --input outputs/test-photo-source.comp --output output
 使用同一份已有参考分析完成四项执行，没有再次调用模型：
 
 ```bash
-uv run apply_analysis.py --analysis outputs/reference-model-run/analysis.json --input outputs/test-photo-source.comp --output outputs/reference-contrast.comp
+uv run apply_analysis.py --analysis outputs/experiments/reference-model-run/analysis.json --input outputs/sources/test-photo-source.comp --output outputs/experiments/reference-contrast.comp
 ```
 
 该命令本次已执行，重试须换新的输出名称。组合参数为冷暖 `0.25 → 5`、曝光 `-0.1 EV`、对比度 `0.15`（暗部 `64 → 59.2`，亮部 `192 → 196.8`）和饱和度 `0.1 → 10`。对应 `outputs/reference-contrast.report.json` 记录四项参数、实际曲线、图层顺序及参考来源；未执行项为空，不表示完整风格迁移已经完成。
@@ -507,11 +619,18 @@ uv run python -m unittest discover -s tests -v
 | `refine_agent.py` | 核对上一轮状态与确认快照、反馈进度通知、请求新方案、从原工程生成新版本 |
 | `app.py` | 页面输入与预览确认、明确提交、阶段提示、版本查看及打开工程 |
 | `ui_jobs.py` | 准备照片上传、已有工程及反馈任务，绑定来源与所选版本，限制单次提交 |
+| `output_layout.py` | 集中定义新任务目录、兼容旧来源位置、限定报告查找范围 |
+| `preview_output_migration.py` | 只读生成旧目录分类、路径引用及指纹字段的迁移预演，无执行迁移入口 |
+| `migrate_outputs.py` | 核对预演、独立备份、按指纹依赖迁移、前后来源校验及保守恢复 |
+| `tests/test_output_migration.py` | 连续反馈、上传来源、失败与中断恢复、冲突和后续修改保护 |
+| `tests/test_output_layout.py` | 新旧布局并存、预演只读、引用边界、历史快照、冲突与覆盖保护 |
 | `tests/test_project_source.py`、`tests/test_reference.py`、`tests/test_saturation.py`、`tests/test_exposure.py`、`tests/test_contrast.py`、`tests/test_feedback.py`、`tests/test_viewer.py`、`tests/test_ui_jobs.py`、`tests/test_ui_feedback.py`、`tests/test_photo_project.py`、`tests/test_ui_photo_jobs.py` | 来源、工具、反馈、查看器、页面任务及照片导入回归测试 |
 | `AGENTS.md` | 先讲解、批准后施工、验收后继续的协作规则 |
 | `pyproject.toml`、`uv.lock` | 依赖声明与确切版本锁定 |
 
-Git commit 在本地保存版本，Git push 将提交同步到 GitHub。每个阶段通过程序检查和用户验收后，提醒用户检查差异并提交；需要备份或分享时再推送。来源修正、四项基础调色（`a4970b9`）和反馈功能（`d93133b`）均已按用户授权推送 GitHub；查看器、初次调色及反馈界面均已验收，已整理为提交 `89c5132`，并在随后获授权的同步步骤中推送 GitHub。该提交包含 README、页面与任务模块、两个流程入口、三份界面测试及依赖声明与锁定文件，共 10 个文件，排除 `test.py`、`model.jpg` 和生成文件。照片导入工具、上传界面及主题修复均已验收，本次版本整理按用户授权创建本地提交，暂不推送 GitHub。提交范围为 README、页面与任务模块、图片读取/建工程/执行入口，以及三份相关测试，共 9 个文件；继续排除 `test.py`、`model.jpg` 和生成文件。实际提交与同步状态以 Git 记录为准。
+Git commit 在本地保存版本，Git push 将提交同步到 GitHub。每个阶段通过程序检查和用户验收后，提醒用户检查差异并提交；需要备份或分享时再推送。来源修正、四项基础调色（`a4970b9`）和反馈功能（`d93133b`）均已按用户授权推送 GitHub；查看器、初次调色及反馈界面均已验收，已整理为提交 `89c5132`，并在随后获授权的同步步骤中推送 GitHub。该提交包含 README、页面与任务模块、两个流程入口、三份界面测试及依赖声明与锁定文件，共 10 个文件，排除 `test.py`、`model.jpg` 和生成文件。照片导入工具、上传界面及主题修复均已验收，整理为提交 `fa58463`，包含 README、页面与任务模块、图片读取/建工程/执行入口及三份相关测试，共 9 个文件。
+
+本轮已验收的内容包括原生 PNG 导出验证、本地生成文件归档、输出目录规则、迁移预演及真实历史迁移。本轮版本整理只提交 README、`app.py`、`ui_jobs.py`、三个目录与迁移模块，以及五份相关测试，共 11 个文件；按用户要求仅创建本地提交，暂不推送 GitHub。继续保留 `test.py` 暂存内容，排除照片、密钥及生成文件。Git 保存代码与说明，本地输出及项目外归档备份单独保留，不因提交而上传。实际提交与同步状态以 Git 记录为准。
 
 `.gitignore` 排除 `.env`、`.venv/`、Python 缓存、`.DS_Store`、根目录 `test.jpg`、`manifest_test.json` 和 `outputs/`，忽略不会删除本地文件。`test.py` 是用户的 Base64 练习；其暂存状态保留，不自动混入阶段提交。
 
@@ -531,6 +650,8 @@ Git commit 在本地保存版本，Git push 将提交同步到 GitHub。每个�
 - 已验收独立照片建工程工具：全尺寸资源、中性工程及导入来源记录；真实工程加载和视觉效果已通过用户验证。
 - 已验收页面原照片上传：上传副本、建立原始工程、确认预览、明确提交、来源核对及后续反馈复用；105 项离线测试和一次页面真实调用通过，用户已确认本次样片功能正常。
 - 已验收 Light/Dark 主题显示修复：移除与主题冲突的固定浅色背景，浏览器检查及用户检查通过。
+- 原生成片导出验证：已完成一次用户协助的全尺寸 PNG 导出与文件检查，本次颜色一致性已获用户确认；自动导出及网页成片展示尚未接入。
+- 已验收输出目录整理：新任务按分类保存，历史文件已备份迁移，来源与反馈指纹依赖保持有效；128 项离线测试及迁移后页面检查通过，用户已确认目录和网页正常。
 - 阶段内优先保证任务完整、输入对应、执行准确和失败可解释；不反复追求每项参数的精细效果。
 
 当前 `乘以 20` 的冷暖幅度只是明确标记的暂定规则，第一阶段不把它当作已经校准的精确转换。
