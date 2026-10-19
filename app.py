@@ -12,6 +12,7 @@ import streamlit as st
 
 from apply_analysis import load_verified_analysis
 from compositor_tool import get_project_image
+from export_view import load_export_for_report
 from output_layout import default_source_project, report_candidates
 from refine_agent import read_verified_preview, required_path
 from run_agent import PipelineError
@@ -329,6 +330,35 @@ def render_feedback_job(root, selected, view):
             st.rerun()
 
 
+def render_export(root, selected):
+    """每轮重运行重新绑定所选报告；没有成片或校验失败时不创建下载按钮。"""
+    st.subheader("调色后成片")
+    try:
+        exported = load_export_for_report(root, selected)
+    except ValueError as error:
+        st.warning(str(error))
+        return
+    if exported is None:
+        st.info("该版本尚无已登记的成片。可在 Compositor 中查看工程；当前页面不会自动导出。")
+        return
+    picture, details = st.columns([2, 1])
+    with picture:
+        st.image(exported["preview_bytes"], caption="调色后成片预览", width=420)
+    with details:
+        width, height = exported["dimensions"]
+        st.write(f"PNG · {width} × {height} · {len(exported['png_bytes']) / 1024 ** 2:.2f} MiB")
+        st.caption("预览为缩小的显示副本。下载保留导出文件的完整尺寸和原始字节。")
+        st.caption("这份成片的颜色一致性已通过人工确认。" if exported["user_reviewed"]
+                   else "这份成片尚待人工确认画面与颜色。")
+        st.download_button(
+            "下载原尺寸 PNG", data=exported["png_bytes"], file_name=exported["download_name"],
+            mime="image/png", on_click="ignore",
+            key=f"download_export_{exported['report_sha256']}_{exported['sha256']}",
+        )
+        with st.expander("成片文件位置"):
+            st.code(str(exported["png_path"]), language=None)
+
+
 def render_page(output_dir=None):
     """查看不调用模型；初次调色与反馈都需要单独检查和明确提交。"""
     root = Path(output_dir).resolve() if output_dir is not None else PROJECT_DIR / "outputs"
@@ -411,7 +441,7 @@ def render_page(output_dir=None):
         if feedback:
             st.markdown("**本轮反馈**")
             st.write(feedback["text"])
-        st.info("这里展示的是分析输入。调色后的画面请在 Compositor 中查看。")
+        st.info("这里展示的是分析输入。已登记的调色结果显示在下方“调色后成片”；也可打开 Compositor 查看工程。")
 
     st.subheader("本次执行参数")
     columns = st.columns(4)
@@ -422,6 +452,7 @@ def render_page(output_dir=None):
         column.metric(label, value)
     st.caption("冷暖、对比度和饱和度为方案建议值，不是视觉百分比。参数来自保存的执行记录；工程中的手动修改不会自动更新此记录。")
 
+    render_export(root, selected)
     render_feedback_job(root, selected, view)
 
     analysis_tab, reference_tab, feedback_tab, files_tab = st.tabs(["分析建议", "参考风格", "反馈记录", "文件位置"])
